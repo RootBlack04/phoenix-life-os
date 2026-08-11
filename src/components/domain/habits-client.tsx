@@ -1,0 +1,125 @@
+"use client";
+
+import { useTransition } from "react";
+import { Check } from "lucide-react";
+
+import { setHabit } from "@/lib/db/actions";
+
+import { Card, CardHeader } from "@/components/ui/card";
+
+import { cn } from "@/lib/utils";
+
+import type { HabitRow } from "@/types";
+
+const days = ["M", "T", "W", "T", "F", "S", "S"];
+
+function getDateKey(mondayDate: string, index: number) {
+  const date = new Date(`${mondayDate}T00:00:00.000Z`);
+
+  date.setUTCDate(date.getUTCDate() + index);
+
+  return date.toISOString().slice(0, 10);
+}
+
+export function HabitsClient({
+  habits,
+  mondayDate,
+}: {
+  habits: HabitRow[];
+  mondayDate: string;
+}) {
+  const [pending, startTransition] = useTransition();
+
+  return (
+    <Card>
+      <CardHeader
+        title="Habits Tracker"
+        eyebrow="This week"
+        action={
+          <span className="text-xs text-accent-blue-soft">Weekly view</span>
+        }
+      />
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[620px] border-collapse">
+          <thead>
+            <tr>
+              <th className="pb-3 pr-4 text-left text-[11px] font-medium text-text-tertiary">
+                Habit
+              </th>
+
+              {days.map((day, index) => (
+                <th
+                  key={`${day}-${index}`}
+                  className="w-10 pb-3 text-center text-[11px] font-medium text-text-tertiary"
+                >
+                  {day}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {habits.map((habit) => {
+              const completedCount = habit.days.filter(Boolean).length;
+
+              return (
+                <tr key={habit.id} className="border-t border-white/5">
+                  <td className="py-3 pr-4 text-sm text-text-secondary">
+                    <span className="mr-2">{habit.emoji}</span>
+
+                    <span>{habit.label}</span>
+
+                    <span className="ml-2 text-[10px] text-text-tertiary">
+                      ({completedCount}/7)
+                    </span>
+                  </td>
+
+                  {habit.days.map((completed, index) => {
+                    const date = getDateKey(mondayDate, index);
+
+                    return (
+                      <td key={date} className="py-3 text-center">
+                        <button
+                          type="button"
+                          disabled={pending}
+                          aria-label={`${habit.label} ${date}`}
+                          aria-pressed={completed}
+                          onClick={() => {
+                            startTransition(async () => {
+                              await setHabit({
+                                habitId: habit.id,
+                                date,
+                                completed: !completed,
+                              });
+                            });
+                          }}
+                          className={cn(
+                            "mx-auto inline-flex h-5 w-5 items-center justify-center rounded-md transition-all",
+                            "focus:outline-none focus:ring-2 focus:ring-accent-blue/40",
+                            "disabled:cursor-not-allowed disabled:opacity-50",
+
+                            completed
+                              ? "bg-success/90 shadow-[0_0_10px_rgba(52,211,153,0.18)]"
+                              : "bg-white/5 hover:bg-white/10",
+                          )}
+                        >
+                          {completed && (
+                            <Check
+                              className="h-3 w-3 text-black"
+                              strokeWidth={3}
+                            />
+                          )}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}

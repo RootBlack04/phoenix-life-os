@@ -1,0 +1,6 @@
+import { LayoutTemplate, Server, Database, Boxes, Binary } from "lucide-react";
+import { Card, CardHeader } from "@/components/ui/card";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import type { EngineeringTrack } from "@/types";
+const icons={LayoutTemplate,Server,Database,Boxes,Binary};
+export function EngineeringPreview({ engineeringTracks }: { engineeringTracks: EngineeringTrack[] }) { return <Card><CardHeader title="Engineering Progress" action={<a href="/engineering" className="text-xs text-accent-blue-soft hover:underline">View details</a>}/><div className="space-y-4">{engineeringTracks.slice(0,4).map(t=>{const Icon=icons[t.icon as keyof typeof icons]??Boxes; return <div key={t.id} className="flex items-center gap-3"><div className="h-8 w-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0"><Icon className="h-4 w-4 text-accent-purple"/></div><div className="flex-1 min-w-0"><div className="flex items-center justify-between mb-1"><p className="text-sm text-text-secondary truncate">{t.label}</p><span className="font-mono-num text-xs text-text-tertiary shrink-0">{t.percent}%</span></div><ProgressBar percent={t.percent} height={6} gradientFrom="var(--accent-purple)" gradientTo="var(--accent-pink)"/></div></div>})}</div></Card>; }

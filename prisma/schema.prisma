@@ -1,0 +1,401 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GoalStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+enum JobStage {
+  APPLIED
+  INTERVIEW
+  OFFER
+  REJECTED
+}
+
+enum ResourceType {
+  BOOK
+  COURSE
+  VIDEO
+  LINK
+  CERTIFICATE
+}
+
+enum IncomeType {
+  FREELANCE
+  REMOTE_JOB
+  SAVINGS
+  OTHER
+}
+
+enum LifeAreaKey {
+  LANGUAGES
+  ENGINEERING
+  CAREER
+  INCOME
+  HEALTH
+  MINDSET
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?  @unique
+  avatarUrl   String?
+  timezone    String   @default("Africa/Casablanca")
+  streakDays  Int      @default(0)
+  memberSince DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+settings UserSettings?
+
+  goals             Goal[]
+  engineeringTracks EngineeringTrack[]
+  tasks             Task[]
+  habits            Habit[]
+  notes             Note[]
+  journalEntries    JournalEntry[]
+  languages         Language[]
+  projects          Project[]
+  jobApplications   JobApplication[]
+  resources         Resource[]
+  healthMetrics     HealthMetric[]
+  incomeRecords     Income[]
+  dailyMetrics      DailyMetric[]
+}
+
+enum Theme {
+  AURORA
+  SUNSET
+  FOREST
+}
+
+enum AppLanguage {
+  ENGLISH
+  SPANISH
+  FRENCH
+  ARABIC
+}
+
+model UserSettings {
+  id                       String       @id @default(cuid())
+  userId                   String       @unique
+
+  theme                    Theme        @default(AURORA)
+  sidebarCollapsed         Boolean      @default(false)
+
+  dailyMissionReminders    Boolean      @default(true)
+  weeklyReviewEmail        Boolean      @default(true)
+  habitStreakAlerts        Boolean      @default(true)
+  jobApplicationFollowUps  Boolean      @default(false)
+
+  weeklyFocusHours         Int          @default(30)
+  weeklyScoreGoal          Int          @default(75)
+
+  language                 AppLanguage  @default(ENGLISH)
+
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  user                     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Goal {
+  id          String      @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  category    LifeAreaKey
+  priority    Priority    @default(MEDIUM)
+  progress    Int         @default(0)
+  deadline    DateTime?
+  status      GoalStatus  @default(IN_PROGRESS)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, category])
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  status      TaskStatus @default(PENDING)
+  priority    Priority   @default(MEDIUM)
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, dueDate])
+}
+
+model Habit {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  emoji       String   @default("✓")
+  frequency   String   @default("daily")
+  target      Int      @default(7)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  logs HabitLog[]
+
+  @@index([userId])
+}
+
+model HabitLog {
+  id        String   @id @default(cuid())
+  habitId   String
+  date      DateTime @db.Date
+  completed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  habit Habit @relation(fields: [habitId], references: [id], onDelete: Cascade)
+
+  @@unique([habitId, date])
+  @@index([habitId, date])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  content   String   @db.Text
+  tag       String   @default("General")
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@index([userId, pinned])
+}
+
+model JournalEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  content   String   @db.Text
+  mood      Int
+  date      DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+model Language {
+  id               String   @id @default(cuid())
+  userId           String
+  code             String
+  name             String
+  flag             String
+  currentLevel     String
+  targetLevel      String
+  percent          Int      @default(0)
+  vocabulary       Int      @default(0)
+  grammar          Int      @default(0)
+  listening        Int      @default(0)
+  speaking         Int      @default(0)
+  writing          Int      @default(0)
+  reading          Int      @default(0)
+  hoursLogged      Float    @default(0)
+  dailyGoalMinutes Int      @default(30)
+  weeklyGoalHours  Float    @default(4)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  progress      LanguageProgress[]
+  studySessions LanguageStudySession[]
+
+  @@unique([userId, code])
+}
+
+model LanguageProgress {
+  id         String   @id @default(cuid())
+  languageId String
+  week       String
+  score      Int
+  date       DateTime @default(now())
+
+  language Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+
+  @@index([languageId, date])
+}
+
+model LanguageStudySession {
+  id         String   @id @default(cuid())
+  languageId String
+  date       DateTime @default(now())
+  minutes    Int
+  skill      String
+  note       String?
+
+  language Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+
+  @@index([languageId, date])
+}
+
+model EngineeringTrack {
+  id         String   @id @default(cuid())
+  userId     String
+  key        String
+  label      String
+  icon       String
+  percent    Int      @default(0)
+  status     String
+  tasksDone  Int      @default(0)
+  tasksTotal Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+}
+
+model Project {
+  id            String     @id @default(cuid())
+  userId        String
+  name          String
+  description   String?
+  status        GoalStatus @default(IN_PROGRESS)
+  progress      Int        @default(0)
+  technologies  String[]
+  repositoryUrl String?
+  liveUrl       String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model JobApplication {
+  id        String   @id @default(cuid())
+  userId    String
+  company   String
+  role      String
+  stage     JobStage @default(APPLIED)
+  appliedOn DateTime @default(now())
+  salary    String?
+  location  String?
+  url       String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, stage])
+}
+
+model Resource {
+  id        String       @id @default(cuid())
+  userId    String
+  title     String
+  type      ResourceType
+  progress  Int?
+  tag       String
+  url       String?
+  completed Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model HealthMetric {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime @db.Date
+  weight    Float?
+  sleep     Float?
+  water     Float?
+  steps     Int?
+  workouts  Int?
+  heartRate Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model Income {
+  id        String     @id @default(cuid())
+  userId    String
+  source    String
+  amount    Float
+  goal      Float?
+  type      IncomeType
+  month     DateTime   @db.Date
+  status    String     @default("active")
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, month])
+}
+
+model DailyMetric {
+  id         String   @id @default(cuid())
+  userId     String
+  date       DateTime @db.Date
+  score      Int      @default(0)
+  focusHours Float    @default(0)
+  goalScore  Int      @default(70)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}

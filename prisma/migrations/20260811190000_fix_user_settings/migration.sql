@@ -1,0 +1,40 @@
+CREATE TYPE "Theme" AS ENUM (
+  'AURORA',
+  'SUNSET',
+  'FOREST'
+);
+
+CREATE TYPE "AppLanguage" AS ENUM (
+  'ENGLISH',
+  'SPANISH',
+  'FRENCH',
+  'ARABIC'
+);
+
+CREATE TABLE "UserSettings" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "theme" "Theme" NOT NULL DEFAULT 'AURORA',
+  "sidebarCollapsed" BOOLEAN NOT NULL DEFAULT false,
+  "dailyMissionReminders" BOOLEAN NOT NULL DEFAULT true,
+  "weeklyReviewEmail" BOOLEAN NOT NULL DEFAULT true,
+  "habitStreakAlerts" BOOLEAN NOT NULL DEFAULT true,
+  "jobApplicationFollowUps" BOOLEAN NOT NULL DEFAULT false,
+  "weeklyFocusHours" INTEGER NOT NULL DEFAULT 30,
+  "weeklyScoreGoal" INTEGER NOT NULL DEFAULT 75,
+  "language" "AppLanguage" NOT NULL DEFAULT 'ENGLISH',
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+
+  CONSTRAINT "UserSettings_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "UserSettings_userId_key"
+ON "UserSettings"("userId");
+
+ALTER TABLE "UserSettings"
+ADD CONSTRAINT "UserSettings_userId_fkey"
+FOREIGN KEY ("userId")
+REFERENCES "User"("id")
+ON DELETE CASCADE
+ON UPDATE CASCADE;

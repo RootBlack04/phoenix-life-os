@@ -1,0 +1,4 @@
+import { Card, CardHeader } from "@/components/ui/card";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import type { LanguageProgress } from "@/types";
+export function LanguagesPreview({ languages }: { languages: LanguageProgress[] }) { return <Card><CardHeader title="Languages Progress" action={<a href="/languages" className="text-xs text-accent-blue-soft hover:underline">View details</a>}/><div className="space-y-4">{languages.map(l=><div key={l.id}><div className="flex items-center justify-between mb-1.5"><p className="text-sm font-medium text-text-primary"><span className="mr-1.5">{l.flag}</span>{l.name}<span className="ml-2 text-[11px] text-text-tertiary">{l.currentLevel} → {l.targetLevel}</span></p><span className="font-mono-num text-sm text-text-secondary">{l.percent}%</span></div><ProgressBar percent={l.percent}/></div>)}</div></Card>; }
