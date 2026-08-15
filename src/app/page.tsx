@@ -12,10 +12,12 @@ import { MonthlyProgress } from "@/components/dashboard/monthly-progress";
 import { QuickNotes } from "@/components/dashboard/quick-notes";
 import { WeeklyScoreCard } from "@/components/dashboard/weekly-score-card";
 import { WeeklyInsights } from "@/components/dashboard/weekly-insights";
+import { WeeklyPriorities } from "@/components/dashboard/weekly-priorities";
 import { getOverviewData } from "@/lib/db";
 import { getWeeklyMetrics } from "@/lib/analytics/weekly";
 import { calculateWeeklyScore } from "@/lib/analytics/scores";
 import { generateWeeklyInsights } from "@/lib/analytics/insights";
+import { generateWeeklyPlan } from "@/lib/analytics/planning";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +29,7 @@ export default async function OverviewPage() {
 
   const weeklyScore = calculateWeeklyScore(weeklyMetrics);
   const insights = generateWeeklyInsights(weeklyMetrics, weeklyScore);
+  const weeklyPlan = generateWeeklyPlan(weeklyMetrics, weeklyScore, insights);
 
   const kpisWithoutLegacyWeeklyScore = data.kpis.filter(
     (kpi) => kpi.id !== "weekly-score",
@@ -38,23 +41,29 @@ export default async function OverviewPage() {
 
       <WeeklyInsights insights={insights} />
 
+      <WeeklyPriorities plan={weeklyPlan} />
+
       <KpiGrid kpis={kpisWithoutLegacyWeeklyScore} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2">
           <LifeAreas lifeAreas={data.lifeAreas} />
         </div>
+
         <ActiveMissions missions={data.missions} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <WeeklyLineChart weeklyProgress={data.weeklyProgress} />
+
         <FocusBarChart focusTime={data.focusTime} />
+
         <TaskDonutChart taskStatus={data.taskStatus} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <LanguagesPreview languages={data.languages} />
+
         <EngineeringPreview engineeringTracks={data.engineeringTracks} />
       </div>
 
@@ -62,6 +71,7 @@ export default async function OverviewPage() {
         <div className="xl:col-span-2">
           <HabitsTracker habits={data.habits} />
         </div>
+
         <MonthlyProgress monthlyProgress={data.monthlyProgress} />
       </div>
 
