@@ -11,9 +11,11 @@ import { EngineeringPreview } from "@/components/dashboard/engineering-preview";
 import { MonthlyProgress } from "@/components/dashboard/monthly-progress";
 import { QuickNotes } from "@/components/dashboard/quick-notes";
 import { WeeklyScoreCard } from "@/components/dashboard/weekly-score-card";
+import { WeeklyInsights } from "@/components/dashboard/weekly-insights";
 import { getOverviewData } from "@/lib/db";
 import { getWeeklyMetrics } from "@/lib/analytics/weekly";
 import { calculateWeeklyScore } from "@/lib/analytics/scores";
+import { generateWeeklyInsights } from "@/lib/analytics/insights";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +26,8 @@ export default async function OverviewPage() {
   ]);
 
   const weeklyScore = calculateWeeklyScore(weeklyMetrics);
+  const insights = generateWeeklyInsights(weeklyMetrics, weeklyScore);
 
-  // The new Analytics Score is the single authoritative "Weekly Score".
-  // The legacy KPI with id "weekly-score" uses a different daily-metrics
-  // calculation, so keeping both under the same label would be misleading.
   const kpisWithoutLegacyWeeklyScore = data.kpis.filter(
     (kpi) => kpi.id !== "weekly-score",
   );
@@ -35,6 +35,8 @@ export default async function OverviewPage() {
   return (
     <AppShell title="Overview">
       <WeeklyScoreCard score={weeklyScore} />
+
+      <WeeklyInsights insights={insights} />
 
       <KpiGrid kpis={kpisWithoutLegacyWeeklyScore} />
 
