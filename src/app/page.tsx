@@ -13,7 +13,7 @@ import { QuickNotes } from "@/components/dashboard/quick-notes";
 import { WeeklyScoreCard } from "@/components/dashboard/weekly-score-card";
 import { WeeklyInsights } from "@/components/dashboard/weekly-insights";
 import { WeeklyPriorities } from "@/components/dashboard/weekly-priorities";
-import { getOverviewData } from "@/lib/db";
+import { getOverviewData, getTasks } from "@/lib/db";
 import { getWeeklyMetrics } from "@/lib/analytics/weekly";
 import { calculateWeeklyScore } from "@/lib/analytics/scores";
 import { generateWeeklyInsights } from "@/lib/analytics/insights";
@@ -22,14 +22,23 @@ import { generateWeeklyPlan } from "@/lib/analytics/planning";
 export const dynamic = "force-dynamic";
 
 export default async function OverviewPage() {
-  const [data, weeklyMetrics] = await Promise.all([
+  const [data, tasks, weeklyMetrics] = await Promise.all([
     getOverviewData(),
+    getTasks(),
     getWeeklyMetrics(),
   ]);
 
   const weeklyScore = calculateWeeklyScore(weeklyMetrics);
   const insights = generateWeeklyInsights(weeklyMetrics, weeklyScore);
   const weeklyPlan = generateWeeklyPlan(weeklyMetrics, weeklyScore, insights);
+
+  const dashboardTasks = tasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status as "PENDING" | "IN_PROGRESS" | "DONE",
+    priority: task.priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+  }));
 
   const kpisWithoutLegacyWeeklyScore = data.kpis.filter(
     (kpi) => kpi.id !== "weekly-score",
@@ -41,7 +50,7 @@ export default async function OverviewPage() {
 
       <WeeklyInsights insights={insights} />
 
-      <WeeklyPriorities plan={weeklyPlan} />
+      <WeeklyPriorities plan={weeklyPlan} tasks={dashboardTasks} />
 
       <KpiGrid kpis={kpisWithoutLegacyWeeklyScore} />
 

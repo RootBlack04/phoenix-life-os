@@ -1,14 +1,33 @@
+"use client";
+
 import {
   ArrowRight,
   BriefcaseBusiness,
+  Check,
   Code2,
   Dumbbell,
   Languages,
   Brain,
   ListChecks,
+  Loader2,
+  Play,
+  Plus,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
 import type { WeeklyPriority, WeeklyPlan } from "@/lib/analytics/planning";
+import { addTask, setTaskStatus } from "@/lib/db/actions";
+
+type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE";
+
+type DashboardTask = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+};
 
 const domainMeta: Record<
   WeeklyPriority["domain"],
@@ -37,7 +56,105 @@ const priorityMeta = {
   },
 } as const;
 
-export function WeeklyPriorities({ plan }: { plan: WeeklyPlan }) {
+const taskStatusMeta: Record<
+  TaskStatus,
+  { label: string; className: string }
+> = {
+  PENDING: {
+    label: "PENDING",
+    className: "border-white/10 bg-white/5 text-text-secondary",
+  },
+  IN_PROGRESS: {
+    label: "IN PROGRESS",
+    className:
+      "border-accent-blue/20 bg-accent-blue/10 text-accent-blue-soft",
+  },
+  DONE: {
+    label: "DONE",
+    className: "border-success/20 bg-success/10 text-success",
+  },
+};
+
+function taskTitleForPriority(priority: WeeklyPriority) {
+  return priority.action ?? priority.title;
+}
+
+function findTaskForPriority(
+  priority: WeeklyPriority,
+  tasks: DashboardTask[],
+) {
+  const title = taskTitleForPriority(priority);
+
+  /*
+   * v1 has no dedicated priority/task relation in Prisma yet.
+   * We therefore use the exact title + reason pair created by this feature
+   * as the read-side identity. getTasks() is ordered newest-first, so if
+   * duplicate tasks exist, the latest matching task is displayed.
+   */
+  return tasks.find(
+    (task) =>
+      task.title === title && (task.description ?? "") === priority.reason,
+  );
+}
+
+export function WeeklyPriorities({
+  plan,
+  tasks,
+}: {
+  plan: WeeklyPlan;
+  tasks: DashboardTask[];
+}) {
+  const router = useRouter();
+  const [pendingPriorityId, setPendingPriorityId] = useState<string | null>(
+    null,
+  );
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function handleCreateTask(priority: WeeklyPriority) {
+    setPendingPriorityId(priority.insightId);
+
+    startTransition(async () => {
+      try {
+        await addTask({
+          title: taskTitleForPriority(priority),
+          description: priority.reason,
+          priority:
+            priority.priority === "high"
+              ? "HIGH"
+              : priority.priority === "medium"
+                ? "MEDIUM"
+                : "LOW",
+        });
+
+        router.refresh();
+      } finally {
+        setPendingPriorityId(null);
+      }
+    });
+  }
+
+  function handleStatusChange(
+    priority: WeeklyPriority,
+    task: DashboardTask,
+    status: TaskStatus,
+  ) {
+    setPendingTaskId(task.id);
+
+    startTransition(async () => {
+      try {
+        await setTaskStatus({
+          id: task.id,
+          status,
+        });
+
+        router.refresh();
+      } finally {
+        setPendingTaskId(null);
+      }
+    });
+  }
+
   return (
     <Card>
       <CardHeader
@@ -62,6 +179,10 @@ export function WeeklyPriorities({ plan }: { plan: WeeklyPlan }) {
             const meta = domainMeta[priority.domain];
             const Icon = meta.icon;
             const badge = priorityMeta[priority.priority];
+            const task = findTaskForPriority(priority, tasks);
+            const isCreating =
+              isPending && pendingPriorityId === priority.insightId;
+            const isUpdating = isPending && pendingTaskId === task?.id;
 
             return (
               <article
@@ -104,6 +225,101 @@ export function WeeklyPriorities({ plan }: { plan: WeeklyPlan }) {
                         <p className="text-[11px] leading-5 text-text-secondary">
                           {priority.action}
                         </p>
+                      </div>
+                    )}
+
+                    {!task ? (
+                      <div className="mt-3 flex flex-col gap-3 rounded-lg border border-dashed border-white/10 bg-black/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                            Task
+                          </p>
+                          <p className="mt-1 text-[11px] text-text-secondary">
+                            No task created for this priority yet.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCreateTask(priority)}
+                          disabled={isPending}
+                          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-accent-blue/25 bg-accent-blue/10 px-3 py-2 text-xs font-medium text-accent-blue-soft transition hover:border-accent-blue/40 hover:bg-accent-blue/15 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isCreating ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Plus className="h-3.5 w-3.5" />
+                          )}
+                          {isCreating ? "Creating..." : "Create Task"}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-black/10 p-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                                Task
+                              </span>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[9px] font-medium ${taskStatusMeta[task.status].className}`}
+                              >
+                                {taskStatusMeta[task.status].label}
+                              </span>
+                            </div>
+
+                            <p className="mt-1 text-xs font-medium text-text-primary">
+                              {task.title}
+                            </p>
+                          </div>
+
+                          {task.status === "PENDING" && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleStatusChange(
+                                  priority,
+                                  task,
+                                  "IN_PROGRESS",
+                                )
+                              }
+                              disabled={isUpdating}
+                              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-text-primary transition hover:border-white/20 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isUpdating ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Play className="h-3.5 w-3.5" />
+                              )}
+                              Start Task
+                            </button>
+                          )}
+
+                          {task.status === "IN_PROGRESS" && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleStatusChange(priority, task, "DONE")
+                              }
+                              disabled={isUpdating}
+                              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-success/20 bg-success/10 px-3 py-2 text-xs font-medium text-success transition hover:border-success/30 hover:bg-success/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isUpdating ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Check className="h-3.5 w-3.5" />
+                              )}
+                              Complete
+                            </button>
+                          )}
+
+                          {task.status === "DONE" && (
+                            <span className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-success/20 bg-success/10 px-3 py-2 text-xs font-medium text-success">
+                              <Check className="h-3.5 w-3.5" />
+                              Completed
+                            </span>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
