@@ -202,6 +202,54 @@ export async function getGoals() {
    TASKS
    ========================================================= */
 
+export type CreateTaskInput = {
+  title: string;
+  description?: string;
+  priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  dueDate?: Date;
+};
+
+export async function createTask(input: CreateTaskInput) {
+  return prisma.task.create({
+    data: {
+      userId: DEMO_USER_ID,
+      title: input.title,
+      description: input.description,
+      priority: input.priority,
+      dueDate: input.dueDate,
+    },
+  });
+}
+
+export async function updateTaskStatus(
+  id: string,
+  status: "PENDING" | "IN_PROGRESS" | "DONE",
+) {
+  const task = await prisma.task.findFirst({
+    where: {
+      id,
+      userId: DEMO_USER_ID,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!task) {
+    throw new Error("Task not found");
+  }
+
+  return prisma.task.update({
+    where: {
+      id,
+    },
+    data: {
+      status,
+      completedAt: status === "DONE" ? new Date() : null,
+    },
+  });
+}
+
 export async function getTasks() {
   return prisma.task.findMany({
     where: {

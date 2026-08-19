@@ -21,6 +21,8 @@ import {
   updateLanguageSkills,
   updateNote,
   updateProjectProgress,
+  createTask,
+  updateTaskStatus,
 } from "@/lib/db";
 
 const noteSchema = z.object({
@@ -45,6 +47,18 @@ const jobSchema = z.object({
 const projectSchema = z.object({
   id: z.string(),
   progress: z.number().int().min(0).max(100),
+});
+
+const createTaskSchema = z.object({
+  title: z.string().trim().min(1, "Title is required").max(200),
+  description: z.string().trim().max(2_000).optional(),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+  dueDate: z.coerce.date().optional(),
+});
+
+const taskStatusSchema = z.object({
+  id: z.string().trim().min(1),
+  status: z.enum(["PENDING", "IN_PROGRESS", "DONE"]),
 });
 
 const incomeSchema = z.object({
@@ -213,6 +227,35 @@ export async function setLanguageSkills(
 
   revalidatePath("/languages");
   revalidatePath("/");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tasks                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export async function addTask(input: z.input<typeof createTaskSchema>) {
+  const data = createTaskSchema.parse(input);
+
+  const task = await createTask({
+    title: data.title,
+    description: data.description || undefined,
+    priority: data.priority,
+    dueDate: data.dueDate,
+  });
+
+  revalidatePath("/");
+  return task;
+}
+
+export async function setTaskStatus(
+  input: z.input<typeof taskStatusSchema>,
+) {
+  const data = taskStatusSchema.parse(input);
+
+  const task = await updateTaskStatus(data.id, data.status);
+
+  revalidatePath("/");
+  return task;
 }
 
 /* -------------------------------------------------------------------------- */
