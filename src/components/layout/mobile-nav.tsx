@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  ListTodo,
   Code2,
   HeartPulse,
   CheckSquare,
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 const items = [
   { href: "/", label: "Home", icon: LayoutDashboard },
+  { href: "/tasks", label: "Tasks", icon: ListTodo },
   { href: "/engineering", label: "Eng", icon: Code2 },
   { href: "/habits", label: "Habits", icon: CheckSquare },
   { href: "/health", label: "Health", icon: HeartPulse },

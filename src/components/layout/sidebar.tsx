@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
   LayoutDashboard,
+  ListTodo,
   MessageCircle,
   Code2,
   Briefcase,
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 
 const icons = {
   LayoutDashboard,
+  ListTodo,
   MessageCircle,
   Code2,
   Briefcase,
