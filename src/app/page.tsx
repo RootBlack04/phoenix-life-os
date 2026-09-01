@@ -32,13 +32,22 @@ export default async function OverviewPage() {
   const insights = generateWeeklyInsights(weeklyMetrics, weeklyScore);
   const weeklyPlan = generateWeeklyPlan(weeklyMetrics, weeklyScore, insights);
 
-  const dashboardTasks = tasks.map((task) => ({
-    id: task.id,
-    title: task.title,
-    description: task.description,
-    status: task.status as "PENDING" | "IN_PROGRESS" | "DONE",
-    priority: task.priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  }));
+  const dashboardTasks = tasks
+    .filter((task) => {
+      const createdDateKey = task.createdAt.toISOString().slice(0, 10);
+
+      return (
+        createdDateKey >= weeklyMetrics.week.start &&
+        createdDateKey <= weeklyMetrics.week.end
+      );
+    })
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status as "PENDING" | "IN_PROGRESS" | "DONE",
+      priority: task.priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+    }));
 
   const kpisWithoutLegacyWeeklyScore = data.kpis.filter(
     (kpi) => kpi.id !== "weekly-score",
