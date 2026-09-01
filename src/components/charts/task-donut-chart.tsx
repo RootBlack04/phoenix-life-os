@@ -8,7 +8,7 @@ export function TaskDonutChart({ taskStatus }: { taskStatus: {name:string;value:
 
   return (
     <Card>
-      <CardHeader title="Tasks by Status" eyebrow={`${total} total this week`} />
+      <CardHeader title="Tasks by Status" eyebrow={`${total} total tasks`} />
       <div className="relative h-[180px]">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
