@@ -2,158 +2,120 @@
 
 ## Current checkpoint
 
-### 2026-08-14 — FINAL AUDIT / RELEASE CANDIDATE
+**Phoenix Life OS MVP — Stable Baseline**
 
-**Source of truth:** Local working project `phoenix-life-os_1`, verified against the `phoenix-life-os_14_august_2026.zip` snapshot and subsequent local execution results supplied by the user.
+**Verified:** 2026-09-01
 
-The dated checkpoint history is authoritative for verification status. Older status documents in the original snapshot described an earlier implementation phase and are superseded by this document.
+**Source of truth:** the current repository code and its successful local verification results.
 
----
+The implementation is ready for normal single-user MVP use. All 16 core execution checks and all 12 production routes are GREEN. No RED functional or architectural issue remains. Production deployment and hosting were not part of this verification.
 
-## 1. Environment and database
+## 1. Verified architecture
 
-### 🟢 Verified
-
-- `npx prisma migrate status`
-  - 3 migrations found
-  - Database schema is up to date
-- `npx prisma validate`
-  - schema valid
-- Local PostgreSQL/Supabase connection confirmed at `127.0.0.1:54322`
-- `npm run lint`
-  - passed
-- `npm run build`
-  - passed
-- `npm run db:seed`
-  - previously completed successfully
-- Dashboard opened successfully
-
-No migration reset, destructive database operation, or schema rewrite was required during verification.
-
----
-
-## 2. Module verification
-
-### 🟢 Overview
-
-Implemented and database-backed.
-
-### 🟢 Habits
-
-Verified:
-
-- weekly tracking
-- individual-day toggling
-- persistence
-- heatmap/statistics
-- date-key handling
-- unique habit/date protection
-
-### 🟢 Notes
-
-Implemented and database-backed with create/update/delete/pin/search functionality.
-
-### 🟢 Career
-
-Implemented and verified as a database-backed Kanban workflow.
-
-### 🟢 Income
-
-Implemented and verified with database-backed income entry.
-
-### 🟢 Health
-
-Implemented and database-backed with health metrics and entry persistence.
-
-### 🟢 Engineering — FULLY VERIFIED
-
-Verified:
-
-- `+10%`
-- `-10%`
-- 0% boundary
-- 100% boundary
-- Server Action execution
-- database persistence
-- refresh persistence
-
-### 🟢 Languages — FULLY VERIFIED
-
-Verified:
-
-- English skill updates
-- Spanish skill updates
-- Grammar updates
-- Listening updates
-- English study session: 45 minutes
-- Spanish study session: 60 minutes
-- refresh persistence
-- Server Actions
-- lint/build
-
-### 🟢 Mindset — FULLY VERIFIED
-
-Verified:
-
-- journal creation
-- mood save
-- `addJournalEntry()`
-- refresh persistence
-- `/mindset` successful responses
-
-Test entry used during verification:
-
-- content: `all good`
-- mood: `4`
-
-### 🟢 Resources — FULLY VERIFIED
-
-Verified:
-
-- resource creation
-- progress changes
-- completion toggle
-- refresh persistence
-- deletion
-
-Test resource used:
-
-- title: `JavaScript Advanced`
-- type: `COURSE`
-- tag: `Dev`
-
-### 🟢 Settings — FULLY VERIFIED
-
-Verified:
-
-- settings UI
-- preference changes
-- notification settings
-- `saveSettings()`
-- refresh/page reload
-- persistence
-
----
-
-## 3. Production verification
-
-### 🟢 ESLint
-
-```bash
-npm run lint
+```text
+Next.js App Router
+→ Server and Client Components
+→ Zod-validated Server Actions
+→ shared database access layer
+→ Prisma
+→ PostgreSQL / Supabase Local
 ```
 
-Passed.
+Verified characteristics:
 
-### 🟢 Production build
+- Real application state is stored through Prisma; React local state is not the persistence source of truth.
+- Weekly analytics are calculated read models and do not duplicate database state.
+- Score, insights, planning, priority creation, task execution, and review form one execution architecture.
+- The existing Prisma `Task` model is the only task abstraction.
+- No global state framework was introduced.
+- Task reads and creation use the current `demo-user` scope.
+- Task status updates verify ownership before mutation.
+- Server Actions validate writes with Zod.
+- The existing three Prisma migrations remain intact; no execution provenance migration was required.
+- `prisma/seed.ts` remains configured for optional local bootstrap.
 
-```bash
-npm run build
+## 2. Core execution loop
+
+```text
+Track
+→ Measure
+→ Understand
+→ Prioritize
+→ Execute
+→ Review
+→ Improve
 ```
 
-Passed.
+### Weekly Analytics — GREEN
 
-Routes successfully included:
+- Queries database-backed activity for the active and previous weeks.
+- Covers habits, languages, engineering, career, health, mindset, tasks, and daily metrics where data is available.
+- Missing data remains unavailable rather than being counted as failure.
+
+### Weekly Score — GREEN
+
+- Calculated from available weekly domain metrics.
+- Excludes domains without a valid configured measurement instead of inventing a score.
+
+### Insights — GREEN
+
+- Produces deterministic explanations and actionable recommendations from weekly metrics and score results.
+
+### Planning and Weekly Priorities — GREEN
+
+- The planning engine selects a focused set of actionable insights.
+- Weekly Priorities render on Overview.
+- Task creation remains explicit and user-controlled.
+
+### Priority → Task integration — GREEN
+
+- **Create Task** calls the validated `addTask()` Server Action.
+- The task is persisted through the existing Prisma `Task` model.
+- Association requires creation inside the active weekly range plus an exact title-and-description match.
+- Historical exact matches do not attach to the current week's priority.
+- Task status does not break the association.
+
+### `/tasks` execution — GREEN
+
+- Reads real tasks through `getTasks()`.
+- Groups tasks into Pending, In Progress, and Done.
+- Displays title, optional description, priority, optional due date, and status.
+- Supports `PENDING → IN_PROGRESS → DONE` through `setTaskStatus()`.
+- Done tasks render as read-only completed work.
+- Status changes refresh server-backed data and persist through hard refreshes.
+
+### `completedAt` lifecycle — GREEN
+
+- Moving a task to `DONE` sets `completedAt`.
+- Moving a task out of `DONE` clears `completedAt`.
+- Final read-only database verification found no done task missing `completedAt` and no active task retaining it.
+
+### Weekly Execution Review — GREEN
+
+- Renders on Overview from active-week task metrics.
+- Displays completed tasks, tracked tasks, current in-progress tasks, and completion rate.
+- Uses the existing weekly analytics output rather than duplicating calculations in the UI.
+
+## 3. Verified production modules
+
+| Module | Status | Verified behavior |
+|---|---|---|
+| Overview | GREEN | Analytics, score, insights, priorities, execution review, and database-backed summaries |
+| Tasks | GREEN | Real task groups, lifecycle actions, refresh persistence, and empty states |
+| Career | GREEN | Database-backed application board and neutral career guidance |
+| Engineering | GREEN | Track/project progress and persisted updates |
+| Habits | GREEN | Weekly tracking, history, and persisted toggles |
+| Health | GREEN | Database-backed metrics and logging |
+| Income | GREEN | Database-backed entries |
+| Languages | GREEN | Skill updates and study-session persistence |
+| Mindset | GREEN | Journal and mood persistence |
+| Notes | GREEN | Create, update, delete, pin, and search behavior |
+| Resources | GREEN | Create, progress, completion, and delete behavior |
+| Settings | GREEN | Display-name persistence and persisted desktop-sidebar default |
+
+## 4. Production routes
+
+The optimized build and production-mode route pass verified:
 
 ```text
 /
@@ -167,82 +129,83 @@ Routes successfully included:
 /notes
 /resources
 /settings
+/tasks
 ```
 
----
+Tasks appears in desktop and mobile navigation and follows the established active-state behavior.
 
-## 4. Known issues
+## 5. Settings behavior
 
-### Documentation freshness — RESOLVED
+The production Settings UI exposes only controls with real application behavior:
 
-Older documentation files from the original snapshot described an earlier phase.
+- Display name
+- Collapsed sidebar by default
 
-This document supersedes those status claims.
+The desktop Sidebar initializes from the persisted default and retains local manual expand/collapse behavior after mount. Hidden legacy preference fields remain preserved in the database and save payload, but inert controls are not presented as functional features.
 
-### Secrets — NO PROJECT ISSUE
+Timezone remains visible as truthful, read-only profile information.
 
-`.env` and `.env.local` were shared privately as part of the local project archive and are not in the GitHub repository according to the user's confirmation.
+## 6. MVP cleanup completed
 
-No credentials are reproduced here.
+- Career résumé, LinkedIn, portfolio, and networking cards use neutral guidance instead of unsupported progress claims.
+- The legacy `/execution-demo` prototype and its exclusive component were removed after the real execution flow was verified.
+- The unused legacy frontend `src/data/mock.ts` module was removed.
+- Production pages have no dependency on fake frontend task data.
+- `prisma/seed.ts` was intentionally retained for local database bootstrap.
 
-### UI screenshot duplication — NOT A PROJECT ISSUE
+## 7. Verification status
 
-A previous apparent duplicate Sidebar item was confirmed by the user to be a screen-capture artifact, not a Phoenix Life OS UI bug.
+Passed on the current Stable Baseline:
 
----
+```text
+npm run lint
+npm run build
+TypeScript compilation
+12-route production-mode load pass
+browser console error check
+task refresh-persistence check
+task completedAt invariant check
+Settings persistence and hidden-value preservation checks
+```
 
-# 5. Dated checkpoint history
+Final results:
 
-## 2026-08-14 — Verification Phase Started
+- All 16 core execution checks: **GREEN**
+- All 12 production routes: **GREEN**
+- RED functional issues: **none**
+- RED architectural issues: **none**
 
-Database and Prisma verification began.
+No database reset was performed during final verification.
 
-## 2026-08-14 — Engineering FULL Verification
+## 8. Intentional limitations
 
-Engineering progress controls, persistence, boundaries, lint and build verified.
+These boundaries are intentional for the current MVP:
 
-## 2026-08-14 — Languages FULL Verification
+- The application is single-user and uses `demo-user`.
+- Production authentication and multi-user authorization are not implemented.
+- Timezone editing is not exposed; weekly behavior uses the configured Casablanca application timezone.
+- Alternate themes and theme selection are not implemented.
+- Notifications and notification delivery are not implemented.
+- Localization and language switching are not implemented.
+- Weekly Settings goals remain hidden until they have real consumers.
+- Priority/task provenance uses active-week exact matching rather than a dedicated schema relation.
+- Production deployment and hosting have not been verified.
 
-Language skills, study sessions, persistence, lint and build verified.
+## 9. Next-phase guidance
 
-## 2026-08-14 — Mindset FULL Verification
+The Stable Baseline is complete. Do not continue obsolete audit cleanup work or rebuild verified architecture.
 
-Journal creation, mood, refresh persistence verified.
-
-## 2026-08-14 — Resources FULL Verification
-
-Create, progress, completion, refresh persistence and delete verified.
-
-## 2026-08-14 — Settings FULL Verification
-
-Settings save, preferences, persistence and reload verified.
-
-## 2026-08-14 — Final Audit / Release Candidate
-
-Core modules, Prisma state, lint and production build verified.
-
----
-
-# 6. Current project state
-
-**Phoenix Life OS = 🟢 RELEASE CANDIDATE**
-
-Core functionality is implemented and verified.
-
-No new feature is currently required to close the core development phase.
-
-Future work should be handled as isolated improvements:
+Future feature work should start only from a new explicit product decision, then follow:
 
 ```text
 ONE TASK
-↓
-TEST
-↓
-VERIFY
-↓
-DATED CHECKPOINT
-↓
-NEXT TASK
+→ IMPLEMENT
+→ TEST
+→ VERIFY PERSISTENCE
+→ LINT
+→ BUILD
+→ CHECKPOINT
+→ NEXT TASK
 ```
 
-Do not rewrite working architecture without a concrete reason.
+Current code remains the authoritative source for implementation status.
