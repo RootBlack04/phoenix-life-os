@@ -13,6 +13,7 @@ import { QuickNotes } from "@/components/dashboard/quick-notes";
 import { WeeklyScoreCard } from "@/components/dashboard/weekly-score-card";
 import { WeeklyInsights } from "@/components/dashboard/weekly-insights";
 import { WeeklyPriorities } from "@/components/dashboard/weekly-priorities";
+import { WeeklyExecutionReview } from "@/components/dashboard/weekly-execution-review";
 import { getOverviewData, getTasks } from "@/lib/db";
 import { getWeeklyMetrics } from "@/lib/analytics/weekly";
 import { calculateWeeklyScore } from "@/lib/analytics/scores";
@@ -60,6 +61,11 @@ export default async function OverviewPage() {
       <WeeklyInsights insights={insights} />
 
       <WeeklyPriorities plan={weeklyPlan} tasks={dashboardTasks} />
+
+      <WeeklyExecutionReview
+        metrics={weeklyMetrics.current.tasks}
+        week={weeklyMetrics.week}
+      />
 
       <KpiGrid kpis={kpisWithoutLegacyWeeklyScore} />
 

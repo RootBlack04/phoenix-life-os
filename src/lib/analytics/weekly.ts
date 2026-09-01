@@ -42,6 +42,7 @@ type WeeklyRangeMetrics = {
   };
   tasks: {
     completed: number;
+    inProgress: number;
     total: number;
     completionRate: number;
   };
@@ -270,6 +271,9 @@ async function getRangeMetrics(range: DateRange) {
       task.completedAt >= range.start &&
       task.completedAt < range.endExclusive,
   ).length;
+  const inProgressTasks = tasks.filter(
+    (task) => task.status === "IN_PROGRESS",
+  ).length;
   const dailyScores = daily.map((metric) => metric.score);
   const daysOnTrack = daily.filter((metric) => metric.score >= metric.goalScore).length;
 
@@ -316,6 +320,7 @@ async function getRangeMetrics(range: DateRange) {
     },
     tasks: {
       completed: completedTasks,
+      inProgress: inProgressTasks,
       total: tasks.length,
       completionRate: percentage(completedTasks, tasks.length),
     },
