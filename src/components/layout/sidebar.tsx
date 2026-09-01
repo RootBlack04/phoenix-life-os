@@ -39,9 +39,9 @@ const icons = {
   Settings,
 };
 
-export function Sidebar() {
+export function Sidebar({ initialCollapsed }: { initialCollapsed: boolean }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   return (
     <aside
