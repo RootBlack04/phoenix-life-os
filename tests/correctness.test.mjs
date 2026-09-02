@@ -25,6 +25,56 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Career direct stage action validates enum and updates only stage", async () => {
+  const writes = [], paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { jobApplication: {
+    update: async (input) => { writes.push(input); return input.data; },
+  } } } });
+  const { setJobStage } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  for (const stage of ["INVALID", "applied", "", null]) await assert.rejects(() => setJobStage({ id: "job", stage }));
+  assert.equal(writes.length, 0);
+  const { JobStage } = load("src/generated/prisma/enums.ts");
+  for (const stage of Object.values(JobStage)) await setJobStage({ id: "job", stage, company: "Must not change" });
+  assert.deepEqual(writes.map((input) => input.data.stage), Object.values(JobStage));
+  assert.ok(writes.every((input) => Object.keys(input.data).join() === "stage" && input.where.id === "job"));
+  assert.deepEqual(paths, Object.values(JobStage).flatMap(() => ["/career", "/"]));
+});
+
+test("Career select has no cycling, no-op guard, failure retention and server refresh", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [];
+  const hooks = {
+    useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+    useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+    useTransition: () => [false, (fn) => transitions.push(fn())],
+  };
+  const { CareerBoard } = load("src/components/domain/career-board.tsx", {
+    react: hooks, "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { setJobStage: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  let applications = [{ id: "job", company: "Company", role: "Engineer", stage: "applied", appliedOn: "2026-09-01" }], tree;
+  const render = () => { cursor = 0; tree = CareerBoard({ applications }); };
+  const select = () => elements(tree, (node) => node.type === "select")[0];
+  render();
+  assert.equal(elements(tree, (node) => node.type === "article")[0].props.onClick, undefined);
+  assert.equal(elements(tree, (node) => node.type === "button").length, 0);
+  assert.deepEqual(elements(tree, (node) => node.type === "option").map((node) => node.props.value), ["APPLIED", "INTERVIEW", "OFFER", "REJECTED"]);
+  assert.match(select().props["aria-label"], /Company/);
+  select().props.onChange({ target: { value: "APPLIED" } }); assert.equal(calls.length, 0);
+  select().props.onChange({ target: { value: "REJECTED" } });
+  select().props.onChange({ target: { value: "OFFER" } }); render();
+  assert.equal(calls.length, 1); assert.equal(calls[0].stage, "REJECTED");
+  assert.equal(select().props.value, "APPLIED"); assert.match(JSON.stringify(tree), /Saving stage/);
+  rejectSave(new Error("offline")); await Promise.all(transitions); render();
+  assert.equal(select().props.value, "APPLIED"); assert.match(JSON.stringify(tree), /Could not save/);
+  select().props.onChange({ target: { value: "OFFER" } }); resolveSave(); await Promise.all(transitions); render();
+  assert.equal(refreshes, 1); assert.equal(select().props.value, "APPLIED");
+  applications = [{ ...applications[0], stage: "offer" }]; render(); assert.equal(select().props.value, "OFFER");
+  applications = [{ ...applications[0], stage: "rejected" }]; render();
+  select().props.onChange({ target: { value: "APPLIED" } }); resolveSave(); await Promise.all(transitions);
+  assert.equal(calls.at(-1).stage, "APPLIED");
+});
+
 test("manual task creation reuses server validation, owner, defaults and revalidation", async () => {
   const writes = [], paths = [];
   const prisma = { task: { create: async ({ data }) => {

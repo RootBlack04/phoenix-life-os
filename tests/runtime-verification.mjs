@@ -31,6 +31,7 @@ const marker = `Phoenix verification ${crypto.randomUUID()}`;
 const noteText = `${marker} note`;
 const errors = [];
 let browser, taskId, optionalTaskId;
+let careerTestId;
 const nextActionIds = [];
 const tasksOnly = process.env.PHOENIX_TASKS_ONLY === "1";
 try {
@@ -38,6 +39,76 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
+  if (process.env.PHOENIX_CAREER_ONLY === "1") {
+    const original = await prisma.jobApplication.create({ data: {
+      userId: "demo-user", company: marker, role: "Temporary stage verification", stage: "APPLIED",
+      appliedOn: new Date("2026-09-01T12:00:00Z"), salary: "Test salary", location: "Test location",
+      url: "https://example.com", notes: "Temporary record; keep these fields intact",
+    } });
+    careerTestId = original.id;
+    console.log(`TEMP application ${careerTestId}: ${marker}`);
+    const unchangedFields = (record) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== "stage" && key !== "updatedAt"));
+    const card = page.locator("article").filter({ hasText: marker });
+    const select = card.getByRole("combobox", { name: `Stage for ${marker} — Temporary stage verification`, exact: true });
+    await open("/career");
+    await select.waitFor();
+    assert.deepEqual(await select.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["APPLIED", "INTERVIEW", "OFFER", "REJECTED"]);
+    let posts = 0;
+    page.on("request", (request) => { if (request.method() === "POST") posts++; });
+    await card.getByText(marker, { exact: true }).click();
+    await select.focus();
+    await select.selectOption("APPLIED");
+    assert.equal(posts, 0);
+    assert.equal((await prisma.jobApplication.findUniqueOrThrow({ where: { id: careerTestId } })).stage, "APPLIED");
+    await page.route("**/*", async (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await select.selectOption("REJECTED");
+    await page.getByRole("alert").filter({ hasText: "Could not save the stage" }).waitFor();
+    assert.equal(await select.inputValue(), "APPLIED");
+    assert.equal((await prisma.jobApplication.findUniqueOrThrow({ where: { id: careerTestId } })).stage, "APPLIED");
+    await page.unroute("**/*");
+    console.log("PASS card click/current selection do not mutate; failed save retains APPLIED");
+    let releasePost, seenPost;
+    const held = new Promise((resolve) => { releasePost = resolve; });
+    const seen = new Promise((resolve) => { seenPost = resolve; });
+    await page.route("**/*", async (route) => {
+      if (route.request().method() === "POST") { seenPost(); await held; }
+      await route.continue();
+    });
+    const before = posts;
+    await select.selectOption("OFFER");
+    await seen;
+    assert.equal(await select.isDisabled(), true);
+    assert.equal(await select.inputValue(), "APPLIED");
+    await card.getByRole("status").filter({ hasText: "Saving stage" }).waitFor();
+    await select.evaluate((element) => { element.value = "REJECTED"; element.dispatchEvent(new Event("change", { bubbles: true })); });
+    releasePost();
+    await page.waitForFunction((id) => document.getElementById(`stage-${id}`)?.value === "OFFER", careerTestId);
+    await page.unroute("**/*");
+    assert.equal(posts - before, 1);
+    await page.reload(); await select.waitFor();
+    assert.equal(await select.inputValue(), "OFFER");
+    const saved = await prisma.jobApplication.findUniqueOrThrow({ where: { id: careerTestId } });
+    assert.equal(saved.stage, "OFFER");
+    assert.deepEqual(unchangedFields(saved), unchangedFields(original));
+    assert.equal(await prisma.jobApplication.count({ where: { userId: "demo-user", company: marker } }), 1);
+    for (const stage of ["REJECTED", "APPLIED"]) {
+      await select.selectOption(stage);
+      await page.waitForFunction(({ id, stage }) => document.getElementById(`stage-${id}`)?.value === stage, { id: careerTestId, stage });
+      assert.equal((await prisma.jobApplication.findUniqueOrThrow({ where: { id: careerTestId } })).stage, stage);
+    }
+    console.log("PASS direct OFFER without intermediate writes, pending guard, reverse transitions, hard refresh and unchanged metadata");
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const route of ["/career", "/"]) {
+        await open(route);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      }
+    }
+    await open("/career");
+    assert.ok((await select.boundingBox()).height >= 44);
+    assert.deepEqual(errors, []);
+    console.log("PASS Career/Overview desktop and mobile, 44px select target, no uncaught browser errors");
+  } else {
   await open("/");
   const aside = page.locator("aside");
   await aside.getByRole("link", { name: "Tasks", exact: true }).waitFor();
@@ -206,8 +277,14 @@ try {
   console.log("PASS Next Action mobile layout has no horizontal overflow");
   assert.deepEqual(errors, []);
   console.log("PASS no uncaught browser errors");
+  }
 } finally {
   if (browser) await browser.close();
+  if (careerTestId) {
+    const removed = await prisma.jobApplication.deleteMany({ where: { id: careerTestId, userId: "demo-user", company: marker } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED temporary application ${careerTestId}`);
+  }
   // Recover exact IDs even if a save succeeded but the browser lost its response.
   const temporary = await prisma.task.findMany({ where: { userId: "demo-user", title: { in: [marker, `${marker} optional`, `${marker} next 0`, `${marker} next 1`] } }, select: { id: true, title: true } });
   for (const task of temporary) {
@@ -218,5 +295,5 @@ try {
   const notes = await prisma.note.findMany({ where: { userId: "demo-user", title: noteText }, select: { id: true } });
   for (const note of notes) await prisma.note.deleteMany({ where: { id: note.id, userId: "demo-user", title: noteText } });
   await prisma.$disconnect();
-  console.log("Removed only this run's exact temporary task/note records.");
+  console.log("Removed only this run's exact temporary verification records.");
 }
