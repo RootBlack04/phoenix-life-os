@@ -13,8 +13,8 @@ import { AnimatedCounter } from "@/components/ui/animated-counter";
 import type { KpiMetric } from "@/types";
 const icons = { Target, Gauge, Clock, CheckCircle2, CalendarCheck, TrendingUp };
 function Sparkline({ points, color }: { points: number[]; color: string }) {
-  const safe =
-    points.length > 1 ? points : [0, ...(points.length ? points : [0])];
+  if (points.length < 2) return null;
+  const safe = points;
   const max = Math.max(...safe),
     min = Math.min(...safe),
     range = max - min || 1,
@@ -74,7 +74,7 @@ export function KpiGrid({ kpis }: { kpis: KpiMetric[] }) {
                   )}
                 </p>
               </div>
-              <p className="text-[11px] text-success">{k.deltaLabel}</p>
+              <p className="text-[11px] text-text-tertiary">{k.deltaLabel}</p>
             </Card>
           </motion.div>
         );

@@ -14,7 +14,8 @@ import { Card, CardHeader } from "@/components/ui/card";
 export function WeeklyLineChart({ weeklyProgress }: { weeklyProgress: {day:string;score:number;goal:number}[] }) {
   return (
     <Card>
-      <CardHeader title="Weekly Progress Overview" eyebrow="This week vs your 70% goal line" />
+      <CardHeader title="Daily Score History" eyebrow="Last 7 calendar days · recorded scores and targets" />
+      {weeklyProgress.length === 0 && <p className="text-sm text-text-tertiary">No daily scores recorded in this period.</p>}
       <div className="h-[220px] -ml-2">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={weeklyProgress} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>

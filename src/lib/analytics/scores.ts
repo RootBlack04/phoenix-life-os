@@ -85,7 +85,7 @@ const getEngineeringScore = (metrics: WeeklyMetrics["current"]) => {
   const values = [
     metrics.engineering.averageTrackProgress,
     metrics.engineering.averageProjectProgress,
-  ];
+  ].filter((value): value is number => value !== null);
 
   return values.length
     ? values.reduce((sum, value) => sum + value, 0) / values.length
@@ -207,9 +207,8 @@ export function calculateWeeklyScore(metrics: WeeklyMetrics): WeeklyScore {
       2,
     ),
     previousOverall,
-    change:
-      overall !== null && previousOverall !== null
-        ? round(overall - previousOverall)
-        : null,
+    // Current week is incomplete and engineering has no historical snapshots.
+    // Do not advertise a like-for-like trend from incompatible populations.
+    change: null,
   };
 }

@@ -18,14 +18,14 @@ const metricCards = [
   {
     key: "total",
     label: "Tracked",
-    detail: "Tasks in this week",
+    detail: "Created, due or completed this week",
     icon: ListChecks,
     className: "text-accent-blue-soft",
   },
   {
     key: "inProgress",
     label: "In Progress",
-    detail: "Currently active",
+    detail: "In progress within this cohort",
     icon: PlayCircle,
     className: "text-warning",
   },
@@ -54,6 +54,7 @@ export function WeeklyExecutionReview({
         }
       />
 
+      <p className="mb-4 text-xs text-text-tertiary">Weekly cohort: tasks created, due or completed in this range; not the entire backlog.</p>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {metricCards.map((metric) => {
           const Icon = metric.icon;
@@ -72,8 +73,8 @@ export function WeeklyExecutionReview({
               </div>
 
               <p className="mt-3 font-display text-2xl font-semibold text-text-primary">
-                {value}
-                {metric.key === "completionRate" && (
+                {metric.key === "completionRate" && metrics.total === 0 ? "—" : value}
+                {metric.key === "completionRate" && metrics.total > 0 && (
                   <span className="ml-0.5 text-sm text-text-tertiary">%</span>
                 )}
               </p>
@@ -90,7 +91,7 @@ export function WeeklyExecutionReview({
         <div className="mb-2 flex items-center justify-between text-[11px]">
           <span className="text-text-secondary">Execution progress</span>
           <span className="font-medium text-text-primary">
-            {metrics.completionRate}%
+            {metrics.total ? `${metrics.completionRate}%` : "No tasks tracked this week"}
           </span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-white/5">

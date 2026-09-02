@@ -18,7 +18,6 @@ import {
   Settings,
   ChevronsLeft,
   ChevronsRight,
-  LogOut,
   Flame,
 } from "lucide-react";
 import { navItems, settingsItem } from "@/lib/nav";
@@ -74,6 +73,9 @@ export function Sidebar({ initialCollapsed }: { initialCollapsed: boolean }) {
             <Link
               key={item.href}
               href={item.href}
+              aria-label={item.label}
+              title={collapsed ? item.label : undefined}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
                 active
@@ -101,6 +103,9 @@ export function Sidebar({ initialCollapsed }: { initialCollapsed: boolean }) {
           return (
             <Link
               href={settingsItem.href}
+              aria-label={settingsItem.label}
+              title={collapsed ? settingsItem.label : undefined}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors",
                 active ? "text-text-primary bg-white/5" : "text-text-secondary hover:text-text-primary hover:bg-white/5"
@@ -111,12 +116,11 @@ export function Sidebar({ initialCollapsed }: { initialCollapsed: boolean }) {
             </Link>
           );
         })()}
-        <button className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-text-secondary hover:text-danger hover:bg-danger/5 transition-colors">
-          <LogOut className="h-[18px] w-[18px] shrink-0" />
-          {!collapsed && <span>Logout</span>}
-        </button>
         <button
           onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
           className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-text-tertiary hover:text-text-primary hover:bg-white/5 transition-colors"
         >
           {collapsed ? <ChevronsRight className="h-[18px] w-[18px]" /> : <ChevronsLeft className="h-[18px] w-[18px]" />}

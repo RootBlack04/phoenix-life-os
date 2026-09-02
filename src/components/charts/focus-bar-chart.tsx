@@ -10,7 +10,8 @@ export function FocusBarChart({ focusTime }: { focusTime: {day:string;hours:numb
 
   return (
     <Card>
-      <CardHeader title="Focus Time" eyebrow={`Goal: 30h this week`} action={<span className="font-mono-num text-sm font-semibold text-text-primary">{h}h {m}m</span>} />
+      <CardHeader title="Focus Time" eyebrow="Recorded daily metrics · last 7 calendar days" action={<span className="font-mono-num text-sm font-semibold text-text-primary">{focusTime.length ? `${h}h ${m}m` : "—"}</span>} />
+      {focusTime.length === 0 && <p className="text-sm text-text-tertiary">No focus records in this period.</p>}
       <div className="h-[180px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={focusTime} margin={{ top: 8, right: 4, left: -20, bottom: 0 }}>

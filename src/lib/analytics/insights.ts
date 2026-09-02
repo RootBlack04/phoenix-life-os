@@ -16,19 +16,6 @@ export type WeeklyInsight = {
   domain: ScoreDomain | null;
 };
 
-const round = (value: number, decimals = 1) => {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-};
-
-const delta = (current: number, previous: number) => round(current - previous);
-
-const priorityForDrop = (value: number): InsightPriority => {
-  if (value <= -20) return "high";
-  if (value <= -10) return "medium";
-  return "low";
-};
-
 const priorityForScore = (score: number): InsightPriority => {
   if (score < 40) return "high";
   if (score < 60) return "medium";
@@ -50,39 +37,7 @@ export function generateWeeklyInsights(
 ): WeeklyInsight[] {
   const insights: WeeklyInsight[] = [];
 
-  const habitDelta = delta(
-    metrics.current.habits.completionRate,
-    metrics.previous.habits.completionRate,
-  );
-
-  // One insight per domain is preferred. A concrete trend takes precedence
-  // over a generic low-score opportunity.
-  if (
-    metrics.current.habits.expected > 0 &&
-    metrics.previous.habits.expected > 0 &&
-    habitDelta < 0
-  ) {
-    insights.push({
-      id: "habits-decline",
-      kind: "warning",
-      priority: priorityForDrop(habitDelta),
-      title: "Habit consistency dropped",
-      description: `Habit completion fell from ${metrics.previous.habits.completionRate}% to ${metrics.current.habits.completionRate}% (${habitDelta} points).`,
-      action: "Prioritize your existing habits before adding new ones.",
-      domain: "habits",
-    });
-  } else if (metrics.current.habits.expected > 0 && habitDelta > 0) {
-    insights.push({
-      id: "habits-improvement",
-      kind: "positive",
-      priority: "low",
-      title: "Habit consistency improved",
-      description: `Habit completion increased from ${metrics.previous.habits.completionRate}% to ${metrics.current.habits.completionRate}% (+${habitDelta} points).`,
-      action: null,
-      domain: "habits",
-    });
-  }
-
+  // Do not compare a partial week with a full previous week or changed targets.
   const languageScore = score.domains.languages;
   if (languageScore.available && languageScore.score !== null) {
     if (metrics.current.languages.goalCompletionRate < 50) {
@@ -91,7 +46,7 @@ export function generateWeeklyInsights(
         kind: "warning",
         priority: priorityForScore(languageScore.score),
         title: "Language study is behind target",
-        description: `You logged ${metrics.current.languages.studyHours}h across ${metrics.current.languages.sessions} sessions, reaching ${metrics.current.languages.goalCompletionRate}% of the 10h weekly goal.`,
+        description: `You logged ${metrics.current.languages.studyHours}h across ${metrics.current.languages.sessions} sessions, reaching ${metrics.current.languages.goalCompletionRate}% of the ${metrics.current.languages.goalHours}h weekly goal.`,
         action: "Schedule another focused language session this week.",
         domain: "languages",
       });

@@ -1,9 +1,10 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { addDateDays as addDays, dateFromKey, mondayKey as getMondayKey, weekTimestampRange } from "@/lib/dates";
+export { APP_TIMEZONE } from "@/lib/dates";
 
 export const DEMO_USER_ID = "demo-user";
-export const APP_TIMEZONE = "Africa/Casablanca";
 
 type WeeklyRangeMetrics = {
   habits: {
@@ -19,8 +20,8 @@ type WeeklyRangeMetrics = {
     sessions: number;
   };
   engineering: {
-    averageTrackProgress: number;
-    averageProjectProgress: number;
+    averageTrackProgress: number | null;
+    averageProjectProgress: number | null;
     activeProjects: number;
     completedProjects: number;
   };
@@ -72,47 +73,21 @@ type DateRange = {
   endKey: string;
   start: Date;
   endExclusive: Date;
-};
-
-const toDateKey = (date: Date) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-
-  const year = parts.find((part) => part.type === "year")?.value ?? "";
-  const month = parts.find((part) => part.type === "month")?.value ?? "";
-  const day = parts.find((part) => part.type === "day")?.value ?? "";
-
-  return `${year}-${month}-${day}`;
-};
-
-const dateFromKey = (key: string) => new Date(`${key}T00:00:00.000Z`);
-
-const addDays = (key: string, amount: number) => {
-  const date = dateFromKey(key);
-  date.setUTCDate(date.getUTCDate() + amount);
-  return date.toISOString().slice(0, 10);
-};
-
-const getMondayKey = (date = new Date()) => {
-  const todayKey = toDateKey(date);
-  const today = dateFromKey(todayKey);
-  const mondayOffset = (today.getUTCDay() + 6) % 7;
-
-  return addDays(todayKey, -mondayOffset);
+  instantStart: Date;
+  instantEndExclusive: Date;
 };
 
 const makeRange = (mondayKey: string): DateRange => {
   const endKey = addDays(mondayKey, 6);
+  const timestamps = weekTimestampRange(mondayKey);
 
   return {
     startKey: mondayKey,
     endKey,
     start: dateFromKey(mondayKey),
     endExclusive: dateFromKey(addDays(mondayKey, 7)),
+    instantStart: timestamps.start,
+    instantEndExclusive: timestamps.endExclusive,
   };
 };
 
@@ -155,8 +130,8 @@ async function getRangeMetrics(range: DateRange) {
           studySessions: {
             where: {
               date: {
-                gte: range.start,
-                lt: range.endExclusive,
+                gte: range.instantStart,
+                lt: range.instantEndExclusive,
               },
             },
           },
@@ -168,8 +143,8 @@ async function getRangeMetrics(range: DateRange) {
         where: {
           userId: DEMO_USER_ID,
           appliedOn: {
-            gte: range.start,
-            lt: range.endExclusive,
+            gte: range.instantStart,
+            lt: range.instantEndExclusive,
           },
         },
       }),
@@ -199,20 +174,20 @@ async function getRangeMetrics(range: DateRange) {
           OR: [
             {
               completedAt: {
-                gte: range.start,
-                lt: range.endExclusive,
+                gte: range.instantStart,
+                lt: range.instantEndExclusive,
               },
             },
             {
               dueDate: {
-                gte: range.start,
-                lt: range.endExclusive,
+                gte: range.instantStart,
+                lt: range.instantEndExclusive,
               },
             },
             {
               createdAt: {
-                gte: range.start,
-                lt: range.endExclusive,
+                gte: range.instantStart,
+                lt: range.instantEndExclusive,
               },
             },
           ],
@@ -268,8 +243,8 @@ async function getRangeMetrics(range: DateRange) {
   const completedTasks = tasks.filter(
     (task) =>
       task.completedAt !== null &&
-      task.completedAt >= range.start &&
-      task.completedAt < range.endExclusive,
+      task.completedAt >= range.instantStart &&
+      task.completedAt < range.instantEndExclusive,
   ).length;
   const inProgressTasks = tasks.filter(
     (task) => task.status === "IN_PROGRESS",
@@ -294,11 +269,11 @@ async function getRangeMetrics(range: DateRange) {
       averageTrackProgress:
         tracks.length > 0
           ? Math.round(tracks.reduce((sum, track) => sum + track.percent, 0) / tracks.length)
-          : 0,
+          : null,
       averageProjectProgress:
         projects.length > 0
           ? Math.round(projects.reduce((sum, project) => sum + project.progress, 0) / projects.length)
-          : 0,
+          : null,
       activeProjects: projects.filter((project) => project.status === "IN_PROGRESS").length,
       completedProjects: projects.filter((project) => project.status === "DONE").length,
     },

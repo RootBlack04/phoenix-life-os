@@ -19,6 +19,7 @@ import { getWeeklyMetrics } from "@/lib/analytics/weekly";
 import { calculateWeeklyScore } from "@/lib/analytics/scores";
 import { generateWeeklyInsights } from "@/lib/analytics/insights";
 import { generateWeeklyPlan } from "@/lib/analytics/planning";
+import { weekTimestampRange } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -33,13 +34,12 @@ export default async function OverviewPage() {
   const insights = generateWeeklyInsights(weeklyMetrics, weeklyScore);
   const weeklyPlan = generateWeeklyPlan(weeklyMetrics, weeklyScore, insights);
 
+  const taskWeek = weekTimestampRange(weeklyMetrics.week.start);
   const dashboardTasks = tasks
     .filter((task) => {
-      const createdDateKey = task.createdAt.toISOString().slice(0, 10);
-
       return (
-        createdDateKey >= weeklyMetrics.week.start &&
-        createdDateKey <= weeklyMetrics.week.end
+        task.createdAt >= taskWeek.start &&
+        task.createdAt < taskWeek.endExclusive
       );
     })
     .map((task) => ({
@@ -52,20 +52,24 @@ export default async function OverviewPage() {
 
   const kpisWithoutLegacyWeeklyScore = data.kpis.filter(
     (kpi) => kpi.id !== "weekly-score",
-  );
+  ).map((kpi) => kpi.id === "consistency" ? {
+    ...kpi,
+    value: weeklyMetrics.current.habits.expected > 0 ? String(weeklyMetrics.current.habits.completionRate) : "—",
+    deltaLabel: "Completions / configured weekly targets",
+    trend: [],
+  } : kpi);
 
   return (
     <AppShell title="Overview">
-      <WeeklyScoreCard score={weeklyScore} />
-
-      <WeeklyInsights insights={insights} />
-
       <WeeklyPriorities plan={weeklyPlan} tasks={dashboardTasks} />
 
       <WeeklyExecutionReview
         metrics={weeklyMetrics.current.tasks}
         week={weeklyMetrics.week}
       />
+
+      <WeeklyScoreCard score={weeklyScore} />
+      <WeeklyInsights insights={insights} />
 
       <KpiGrid kpis={kpisWithoutLegacyWeeklyScore} />
 
@@ -93,7 +97,7 @@ export default async function OverviewPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2">
-          <HabitsTracker habits={data.habits} />
+          <HabitsTracker habits={data.habits} mondayDate={weeklyMetrics.week.start} />
         </div>
 
         <MonthlyProgress monthlyProgress={data.monthlyProgress} />

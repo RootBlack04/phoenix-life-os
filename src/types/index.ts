@@ -26,7 +26,7 @@ export interface User {
 export interface LifeArea {
   key: LifeAreaKey;
   label: string;
-  percent: number;
+  percent: number | null;
   status: string;
   color: string;
   icon: string;
@@ -49,7 +49,7 @@ export interface Mission {
   category: LifeAreaKey;
   priority: Priority;
   progress: number;
-  deadline: string;
+  deadline: string | null;
   status: Status;
 }
 

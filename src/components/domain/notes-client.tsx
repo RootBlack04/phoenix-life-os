@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Pin, Search, Plus, Trash2, Save } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
@@ -15,6 +16,8 @@ interface Note {
   tag: string;
   pinned: boolean;
 }
+
+const sameNote = (a: Note, b?: Note) => !!b && a.title === b.title && a.content === b.content && a.tag === b.tag && a.pinned === b.pinned;
 
 const TAGS = [
   "General",
@@ -86,7 +89,18 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
 
   const [query, setQuery] = useState("");
 
-  const [pending, startTransition] = useTransition();
+  const [pending, setPending] = useState(false);
+  const saving = useRef(false);
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState(initialNotes);
+  // Refresh saved records without discarding locally edited drafts.
+  if (source !== initialNotes && !pending) {
+    const previous = new Map(source.map((note) => [note.id, note]));
+    const dirty = notes.filter((note) => !sameNote(note, previous.get(note.id)));
+    setNotes([...initialNotes.filter((note) => !dirty.some((draft) => draft.id === note.id)), ...dirty]);
+    setSource(initialNotes);
+  }
 
   const active = notes.find((note) => note.id === activeId) ?? notes[0];
 
@@ -127,105 +141,54 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
      SAVE EXISTING NOTE
   ========================================================= */
 
-  function persist(id: string, patch: Partial<Note>) {
+  async function persist(id: string, patch: Partial<Note>) {
+    if (saving.current) return;
     const current = notes.find((note) => note.id === id);
-
     if (!current) return;
-
-    const previous = current;
-
-    const next: Note = {
-      ...current,
-      ...patch,
-    };
-
+    const submitted = { ...current, ...patch };
+    if (!submitted.title.trim() || submitted.title.trim().length > 120) {
+      setError("Use a title between 1 and 120 characters. Your draft is still here.");
+      return;
+    }
     updateLocal(id, patch);
-
-    startTransition(async () => {
-      try {
-        const saved = await saveNote(next);
-
-        setNotes((currentNotes) =>
-          currentNotes.map((note) => (note.id === id ? (saved as Note) : note)),
-        );
-      } catch {
-        setNotes((currentNotes) =>
-          currentNotes.map((note) => (note.id === id ? previous : note)),
-        );
-      }
-    });
+    saving.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const saved = await saveNote(submitted);
+      setNotes((items) => items.map((note) => note.id === id && sameNote(note, submitted) ? saved : note));
+      router.refresh();
+    } catch {
+      setError("The note could not be saved. Your edits remain here and are not yet persisted. Use Save note to retry.");
+    } finally { saving.current = false; setPending(false); }
   }
-
-  /* =========================================================
-     CREATE NOTE
-  ========================================================= */
 
   async function add() {
-    if (pending) return;
-
-    const tempId = `temp-${crypto.randomUUID()}`;
-
-    const optimistic: Note = {
-      id: tempId,
-      title: "Untitled note",
-      content: "",
-      tag: "General",
-      pinned: false,
-    };
-
-    setNotes((current) => [optimistic, ...current]);
-
-    setActiveId(tempId);
-
+    if (saving.current) return;
+    saving.current = true;
+    setPending(true);
+    setError(null);
     try {
-      const saved = await saveNote({
-        title: optimistic.title,
-        content: optimistic.content,
-        tag: optimistic.tag,
-        pinned: optimistic.pinned,
-      });
-
-      const savedNote = saved as Note;
-
-      setNotes((current) =>
-        current.map((note) => (note.id === tempId ? savedNote : note)),
-      );
-
-      setActiveId(savedNote.id);
-    } catch {
-      setNotes((current) => current.filter((note) => note.id !== tempId));
-
-      setActiveId((currentId) =>
-        currentId === tempId
-          ? (notes.find((note) => note.id !== tempId)?.id ?? "")
-          : currentId,
-      );
-    }
+      const saved = await saveNote({ title: "Untitled note", content: "", tag: "General", pinned: false });
+      setNotes((items) => [saved, ...items]);
+      setActiveId(saved.id);
+      router.refresh();
+    } catch { setError("Could not create the note. Please try again."); }
+    finally { saving.current = false; setPending(false); }
   }
 
-  /* =========================================================
-     DELETE NOTE
-  ========================================================= */
-
   async function del(id: string) {
-    if (pending) return;
-
-    const previous = notes;
-
-    const remaining = notes.filter((note) => note.id !== id);
-
-    setNotes(remaining);
-
-    if (activeId === id) {
-      setActiveId(remaining[0]?.id ?? "");
-    }
-
+    if (saving.current) return;
+    saving.current = true;
+    setPending(true);
+    setError(null);
     try {
       await removeNote(id);
-    } catch {
-      setNotes(previous);
-      setActiveId(id);
-    }
+      setNotes((items) => items.filter((note) => note.id !== id));
+      setActiveId((current) => current === id ? "" : current);
+      router.refresh();
+    } catch { setError("Could not delete the note. It has been kept."); }
+    finally { saving.current = false; setPending(false); }
   }
 
   /* =========================================================
@@ -350,12 +313,14 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
       ====================================================== */}
 
       <Card>
+        {error && <p role="alert" className="mb-3 text-sm text-danger">{error}</p>}
         {active ? (
           <>
             {/* Header */}
 
             <div className="mb-4 flex items-center justify-between gap-3">
               <input
+                disabled={pending}
                 value={active.title}
                 onChange={(event) =>
                   updateLocal(active.id, {
@@ -431,6 +396,7 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
             {/* Editor */}
 
             <textarea
+              disabled={pending}
               value={active.content}
               onChange={(event) =>
                 updateLocal(active.id, {
@@ -441,6 +407,8 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
               placeholder="Write your note here..."
               className="min-h-[300px] w-full resize-y rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-text-secondary outline-none focus:border-accent-blue/30"
             />
+
+            <button type="button" disabled={pending} onClick={() => persist(active.id, {})} className="mt-3 rounded-lg bg-white/10 px-3 py-2 text-sm disabled:opacity-50">{pending ? "Saving…" : "Save note"}</button>
 
             {/* Preview */}
 

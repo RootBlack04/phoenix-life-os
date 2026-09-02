@@ -1,6 +1,7 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
+import { addDateDays } from "@/lib/dates";
 import { Check } from "lucide-react";
 
 import { Card, CardHeader } from "@/components/ui/card";
@@ -11,49 +12,9 @@ import type { HabitRow } from "@/types";
 
 const dayLabels = ["M", "T", "W", "T", "F", "S", "S"];
 
-function getMondayDateKey() {
-  const now = new Date();
-
-  const day = now.getDay();
-
-  // JS:
-  // Sunday = 0
-  // Monday = 1
-  // ...
-  //
-  // Convert to:
-  // Monday = 0
-  // Tuesday = 1
-  // ...
-  const mondayOffset = (day + 6) % 7;
-
-  const monday = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() - mondayOffset,
-  );
-
-  monday.setHours(12, 0, 0, 0);
-
-  return monday;
-}
-
-function getDateKey(index: number) {
-  const monday = getMondayDateKey();
-
-  monday.setDate(monday.getDate() + index);
-
-  const year = monday.getFullYear();
-
-  const month = String(monday.getMonth() + 1).padStart(2, "0");
-
-  const day = String(monday.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-export function HabitsTracker({ habits }: { habits: HabitRow[] }) {
+export function HabitsTracker({ habits, mondayDate }: { habits: HabitRow[]; mondayDate: string }) {
   const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <Card>
@@ -70,6 +31,7 @@ export function HabitsTracker({ habits }: { habits: HabitRow[] }) {
         }
       />
 
+      {error && <p role="alert" className="mb-3 text-xs text-danger">{error}</p>}
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse min-w-[420px]">
           <thead>
@@ -106,24 +68,19 @@ export function HabitsTracker({ habits }: { habits: HabitRow[] }) {
                   </td>
 
                   {habit.days.map((completed, index) => {
-                    const date = getDateKey(index);
+                    const date = addDateDays(mondayDate, index);
 
                     return (
                       <td key={index} className="text-center py-2">
                         <button
                           type="button"
                           disabled={pending}
-                          onClick={() =>
-                            start(() =>
-                              setHabit({
-                                habitId: habit.id,
-
-                                date,
-
-                                completed: !completed,
-                              }),
-                            )
-                          }
+                          onClick={() => start(async () => {
+                            setError(null);
+                            try { await setHabit({ habitId: habit.id, date, completed: !completed }); }
+                            catch { setError("Could not save the habit. Please try again."); }
+                          })}
+                          aria-pressed={completed}
                           className={cn(
                             "inline-flex h-5 w-5 items-center justify-center rounded-md mx-auto transition",
                             completed

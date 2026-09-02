@@ -18,6 +18,7 @@ import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
 import type { WeeklyPriority, WeeklyPlan } from "@/lib/analytics/planning";
 import { addTask, setTaskStatus } from "@/lib/db/actions";
+import { matchesPriorityTask } from "@/lib/analytics/priority-task";
 
 type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE";
 
@@ -87,13 +88,13 @@ function findTaskForPriority(
 
   /*
    * v1 has no dedicated priority/task relation in Prisma yet.
-   * We therefore use the exact title + reason pair created by this feature
-   * as the read-side identity. getTasks() is ordered newest-first, so if
+   * Use title + explanation template, ignoring changing numeric evidence.
+   * Overview supplies only owned, active-week tasks, ordered newest-first; if
    * duplicate tasks exist, the latest matching task is displayed.
    */
   return tasks.find(
     (task) =>
-      task.title === title && (task.description ?? "") === priority.reason,
+      matchesPriorityTask(task, title, priority.reason),
   );
 }
 
@@ -110,8 +111,10 @@ export function WeeklyPriorities({
   );
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   function handleCreateTask(priority: WeeklyPriority) {
+    setError(null);
     setPendingPriorityId(priority.insightId);
 
     startTransition(async () => {
@@ -128,6 +131,8 @@ export function WeeklyPriorities({
         });
 
         router.refresh();
+      } catch {
+        setError("Could not create the task. Please refresh before retrying to check whether it was saved.");
       } finally {
         setPendingPriorityId(null);
       }
@@ -139,6 +144,7 @@ export function WeeklyPriorities({
     task: DashboardTask,
     status: TaskStatus,
   ) {
+    setError(null);
     setPendingTaskId(task.id);
 
     startTransition(async () => {
@@ -149,6 +155,8 @@ export function WeeklyPriorities({
         });
 
         router.refresh();
+      } catch {
+        setError("Could not update the task. Please refresh and try again.");
       } finally {
         setPendingTaskId(null);
       }
@@ -167,6 +175,7 @@ export function WeeklyPriorities({
         }
       />
 
+      {error && <p role="alert" className="mb-3 text-xs text-danger">{error}</p>}
       {plan.priorities.length === 0 ? (
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
           <p className="text-xs leading-5 text-text-secondary">

@@ -45,6 +45,7 @@ function Toggle({
     <button
       type="button"
       onClick={() => onChange(!checked)}
+      aria-label="Collapsed sidebar by default"
       aria-pressed={checked}
       className={cn(
         "relative h-6 w-11 rounded-full transition-colors shrink-0",
@@ -70,8 +71,16 @@ export function SettingsClient({ initialUser, initialSettings }: Props) {
   const timezone = initialUser.timezone;
 
   const [settings, setSettings] = useState(initialSettings);
+  const [source, setSource] = useState({ name: initialUser.name, settings: initialSettings });
+  if (source.name !== initialUser.name || source.settings !== initialSettings) {
+    // Refresh untouched fields, but keep edits the user has not saved yet.
+    if (name === source.name) setName(initialUser.name);
+    if (settings.sidebarCollapsed === source.settings.sidebarCollapsed) setSettings(initialSettings);
+    setSource({ name: initialUser.name, settings: initialSettings });
+  }
 
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const updateSidebarCollapsed = (value: boolean) => {
     setSettings((current) => ({
@@ -84,20 +93,23 @@ export function SettingsClient({ initialUser, initialSettings }: Props) {
 
   const handleSave = () => {
     setSaved(false);
+    setError(null);
 
     startTransition(async () => {
+      try {
       await saveSettings({
         name,
-        timezone,
-        ...settings,
+        sidebarCollapsed: settings.sidebarCollapsed,
       });
 
       setSaved(true);
+      } catch { setError("Could not save settings. Your changes are still shown but have not been confirmed saved."); }
     });
   };
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Profile */}
         <Card>

@@ -244,6 +244,7 @@ export async function addTask(input: z.input<typeof createTaskSchema>) {
   });
 
   revalidatePath("/");
+  revalidatePath("/tasks");
   return task;
 }
 
@@ -255,6 +256,7 @@ export async function setTaskStatus(
   const task = await updateTaskStatus(data.id, data.status);
 
   revalidatePath("/");
+  revalidatePath("/tasks");
   return task;
 }
 
@@ -348,42 +350,15 @@ export async function saveHealth(input: z.input<typeof healthSchema>) {
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  timezone: z.string().trim().min(1).max(100),
-
-  theme: z.enum(["AURORA", "SUNSET", "FOREST"]),
-
   sidebarCollapsed: z.boolean(),
-
-  dailyMissionReminders: z.boolean(),
-  weeklyReviewEmail: z.boolean(),
-  habitStreakAlerts: z.boolean(),
-  jobApplicationFollowUps: z.boolean(),
-
-  weeklyFocusHours: z.number().int().min(0).max(168),
-  weeklyScoreGoal: z.number().int().min(0).max(100),
-
-  language: z.enum(["ENGLISH", "SPANISH", "FRENCH", "ARABIC"]),
 });
 
 export async function saveSettings(input: z.input<typeof settingsSchema>) {
   const data = settingsSchema.parse(input);
 
-  await updateUserProfile({
-    name: data.name,
-    timezone: data.timezone,
-  });
-
-  await updateSettings({
-    theme: data.theme,
-    sidebarCollapsed: data.sidebarCollapsed,
-    dailyMissionReminders: data.dailyMissionReminders,
-    weeklyReviewEmail: data.weeklyReviewEmail,
-    habitStreakAlerts: data.habitStreakAlerts,
-    jobApplicationFollowUps: data.jobApplicationFollowUps,
-    weeklyFocusHours: data.weeklyFocusHours,
-    weeklyScoreGoal: data.weeklyScoreGoal,
-    language: data.language,
-  });
+  // Write only exposed controls; never replay hidden values from a stale tab.
+  await updateUserProfile({ name: data.name });
+  await updateSettings({ sidebarCollapsed: data.sidebarCollapsed });
 
   revalidatePath("/settings");
   revalidatePath("/");

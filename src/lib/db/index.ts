@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
 
 import type {
   KpiMetric,
@@ -20,7 +21,7 @@ export const DEMO_USER_ID = "demo-user";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-const APP_TIMEZONE = "Africa/Casablanca";
+
 
 /* =========================================================
    DATE HELPERS
@@ -49,56 +50,12 @@ const addDays = (date: Date, days: number) =>
  * 2026-08-03T23:00:00.000Z
  */
 const getDateKeyInTimeZone = (date: Date, timeZone: string) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-
-  const year = parts.find((part) => part.type === "year")?.value ?? "";
-
-  const month = parts.find((part) => part.type === "month")?.value ?? "";
-
-  const day = parts.find((part) => part.type === "day")?.value ?? "";
-
-  return `${year}-${month}-${day}`;
+  if (timeZone !== APP_TIMEZONE) throw new Error("Unsupported application timezone");
+  return localDateKey(date);
 };
-
-/**
- * Convert YYYY-MM-DD into a stable UTC
- * representation of that calendar date.
- *
- * We intentionally use UTC midnight because
- * the application is treating this as a calendar date.
- */
-const dateKeyToUtcDate = (dateKey: string) =>
-  new Date(`${dateKey}T00:00:00.000Z`);
-
-/**
- * Add days to a YYYY-MM-DD date key.
- */
-const addDaysToDateKey = (dateKey: string, days: number) => {
-  const date = dateKeyToUtcDate(dateKey);
-
-  date.setUTCDate(date.getUTCDate() + days);
-
-  return date.toISOString().slice(0, 10);
-};
-
-/**
- * Get Monday of the current week
- * according to Casablanca calendar.
- */
-const getMondayDateKey = () => {
-  const todayKey = getDateKeyInTimeZone(new Date(), APP_TIMEZONE);
-
-  const today = dateKeyToUtcDate(todayKey);
-
-  const mondayOffset = (today.getUTCDay() + 6) % 7;
-
-  return addDaysToDateKey(todayKey, -mondayOffset);
-};
+const dateKeyToUtcDate = dateFromKey;
+const addDaysToDateKey = addDateDays;
+const getMondayDateKey = mondayKey;
 
 /**
  * Return current Monday -> Sunday.
@@ -143,7 +100,7 @@ export async function getSettings() {
 
 export async function updateUserProfile(data: {
   name: string;
-  timezone: string;
+  timezone?: string;
 }) {
   return prisma.user.update({
     where: {
@@ -154,15 +111,15 @@ export async function updateUserProfile(data: {
 }
 
 export async function updateSettings(data: {
-  theme: "AURORA" | "SUNSET" | "FOREST";
+  theme?: "AURORA" | "SUNSET" | "FOREST";
   sidebarCollapsed: boolean;
-  dailyMissionReminders: boolean;
-  weeklyReviewEmail: boolean;
-  habitStreakAlerts: boolean;
-  jobApplicationFollowUps: boolean;
-  weeklyFocusHours: number;
-  weeklyScoreGoal: number;
-  language: "ENGLISH" | "SPANISH" | "FRENCH" | "ARABIC";
+  dailyMissionReminders?: boolean;
+  weeklyReviewEmail?: boolean;
+  habitStreakAlerts?: boolean;
+  jobApplicationFollowUps?: boolean;
+  weeklyFocusHours?: number;
+  weeklyScoreGoal?: number;
+  language?: "ENGLISH" | "SPANISH" | "FRENCH" | "ARABIC";
 }) {
   return prisma.userSettings.upsert({
     where: {
@@ -225,29 +182,26 @@ export async function updateTaskStatus(
   id: string,
   status: "PENDING" | "IN_PROGRESS" | "DONE",
 ) {
-  const task = await prisma.task.findFirst({
+  // The status predicate is checked atomically by PostgreSQL. Concurrent DONE
+  // retries must not overwrite the completion instant of the first transition.
+  await prisma.task.updateMany({
     where: {
       id,
       userId: DEMO_USER_ID,
-    },
-    select: {
-      id: true,
-    },
-  });
-
-  if (!task) {
-    throw new Error("Task not found");
-  }
-
-  return prisma.task.update({
-    where: {
-      id,
+      ...(status === "DONE" ? { status: { not: "DONE" as const } } : {}),
     },
     data: {
       status,
       completedAt: status === "DONE" ? new Date() : null,
     },
   });
+  const task = await prisma.task.findFirst({ where: { id, userId: DEMO_USER_ID } });
+
+  if (!task) {
+    throw new Error("Task not found");
+  }
+
+  return task;
 }
 
 export async function getTasks() {
@@ -941,20 +895,18 @@ export async function getOverviewData() {
       return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
     }
 
-    return 0;
+    return null;
   };
 
   const healthLatest = health.at(-1);
-
-  const healthProgress = healthLatest
-    ? Math.round(
-        ((Math.min(healthLatest.sleep ?? 0, 8) / 8 +
-          Math.min(healthLatest.water ?? 0, 3) / 3 +
-          Math.min(healthLatest.steps ?? 0, 10000) / 10000) /
-          3) *
-          100,
-      )
-    : 0;
+  const healthParts = healthLatest ? [
+    healthLatest.sleep == null ? null : Math.min(healthLatest.sleep, 8) / 8,
+    healthLatest.water == null ? null : Math.min(healthLatest.water, 3) / 3,
+    healthLatest.steps == null ? null : Math.min(healthLatest.steps, 10000) / 10000,
+  ].filter((value): value is number => value !== null) : [];
+  const healthProgress = healthParts.length
+    ? Math.round(healthParts.reduce((sum, value) => sum + value, 0) / healthParts.length * 100)
+    : null;
 
   const mindsetProgress = journal.length
     ? Math.round(
@@ -962,7 +914,7 @@ export async function getOverviewData() {
           Math.min(journal.length, 7)) *
           20,
       )
-    : 0;
+    : null;
 
   const areas = [
     {
@@ -974,9 +926,9 @@ export async function getOverviewData() {
             languages.reduce((sum, language) => sum + language.percent, 0) /
               languages.length,
           )
-        : 0,
+        : null,
 
-      status: "Good",
+      status: "Current snapshot",
       color: "var(--accent-blue)",
       icon: "MessageCircle",
     },
@@ -990,9 +942,9 @@ export async function getOverviewData() {
             engineering.tracks.reduce((sum, track) => sum + track.percent, 0) /
               engineering.tracks.length,
           )
-        : 0,
+        : null,
 
-      status: "Great",
+      status: "Current snapshot",
       color: "var(--accent-purple)",
       icon: "Code2",
     },
@@ -1010,7 +962,7 @@ export async function getOverviewData() {
       key: "income",
       label: "Income",
       percent: categoryProgress("INCOME"),
-      status: "Keep going",
+      status: "Active goal progress",
       color: "var(--warning)",
       icon: "CircleDollarSign",
     },
@@ -1019,7 +971,7 @@ export async function getOverviewData() {
       key: "health",
       label: "Health",
       percent: healthProgress,
-      status: healthProgress >= 70 ? "Great" : "Keep going",
+      status: "Latest recorded metrics",
       color: "var(--success)",
       icon: "HeartPulse",
     },
@@ -1028,17 +980,18 @@ export async function getOverviewData() {
       key: "mindset",
       label: "Mindset",
       percent: mindsetProgress,
-      status: mindsetProgress >= 70 ? "Great" : "Good",
+      status: "Recent journal mood",
       color: "#b58bff",
       icon: "BrainCircuit",
     },
   ];
 
-  const overall = Math.round(
-    areas.reduce((sum, area) => sum + area.percent, 0) / areas.length,
-  );
+  const availableAreas = areas.flatMap((area) => area.percent === null ? [] : [area.percent]);
+  const overall = availableAreas.length ? Math.round(
+    availableAreas.reduce((sum, percent) => sum + percent, 0) / availableAreas.length,
+  ) : null;
 
-  const today = startOfUtcDay(new Date());
+  const today = dateFromKey(localDateKey(new Date()));
 
   const weeklyDays = Array.from({ length: 7 }, (_, index) =>
     addDays(today, index - 6),
@@ -1076,13 +1029,13 @@ export async function getOverviewData() {
   const typedKpis: KpiMetric[] = [
     {
       id: "overall",
-      label: "Overall Progress",
-      value: String(overall),
+      label: "Life-area Snapshot",
+      value: overall === null ? "—" : String(overall),
       unit: "%",
       icon: "Target",
-      deltaLabel: "Calculated from life areas",
+      deltaLabel: "Average of available snapshots",
       deltaPositive: true,
-      trend: dailyMetrics.slice(-7).map((day) => day.score),
+      trend: [],
     },
 
     {
@@ -1099,7 +1052,7 @@ export async function getOverviewData() {
     {
       id: "focus-time",
       label: "Focus Time",
-      value: `${Math.floor(focusHours)}h ${Math.round((focusHours % 1) * 60)}m`,
+      value: weekly.length ? `${Math.floor(focusHours)}h ${Math.round((focusHours % 1) * 60)}m` : "—",
       icon: "Clock",
       deltaLabel: "Last 7 days",
       deltaPositive: true,
@@ -1108,13 +1061,13 @@ export async function getOverviewData() {
 
     {
       id: "tasks",
-      label: "Tasks Completed",
+      label: "Tasks Completed · All time",
       value: String(completedTasks),
       unit: `/${tasks.length}`,
       icon: "CheckCircle2",
       deltaLabel: `${
         tasks.length ? Math.round((completedTasks / tasks.length) * 100) : 0
-      }% completion`,
+      }% all-time completion`,
       deltaPositive: true,
       trend: [completedTasks],
     },
@@ -1137,10 +1090,10 @@ export async function getOverviewData() {
     {
       id: "days-on-track",
       label: "Days On Track",
-      value: String(daysOnTrack),
+      value: weekly.length ? String(daysOnTrack) : "—",
       unit: "/7",
       icon: "TrendingUp",
-      deltaLabel: "Weekly target days",
+      deltaLabel: "Recorded target days · last 7 days",
       deltaPositive: true,
       trend: weekly.map((day) => day.score),
     },
@@ -1156,7 +1109,7 @@ export async function getOverviewData() {
 
     progress: goal.progress,
 
-    deadline: goal.deadline?.toISOString() ?? new Date().toISOString(),
+    deadline: goal.deadline?.toISOString() ?? null,
 
     status: goal.status.toLowerCase().replace("_", "-") as Mission["status"],
   }));
@@ -1192,7 +1145,7 @@ export async function getOverviewData() {
     },
   ];
 
-  const now = new Date();
+  const now = dateFromKey(localDateKey(new Date()));
 
   const monthStart = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),

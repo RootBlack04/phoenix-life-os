@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import {
   addResource,
   removeResource,
@@ -29,17 +29,24 @@ const types = [
 export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
   const form = useRef<HTMLFormElement>(null);
   const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       {/* Add Resource */}
       <form
         ref={form}
         className="glass rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3"
-        action={(formData) => {
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (pending) return;
+          const formData = new FormData(event.currentTarget);
+          setError(null);
           const progressValue = formData.get("progress");
 
           start(async () => {
+            try {
             await addResource({
               title: String(formData.get("title") ?? ""),
               type: String(formData.get("type")) as
@@ -57,6 +64,7 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
             });
 
             form.current?.reset();
+            } catch { setError("Could not save. Your input has been kept; please try again."); }
           });
         }}
       >
@@ -70,16 +78,16 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
           </p>
         </div>
 
-        <input name="title" required placeholder="Title" className="field" />
+        <input disabled={pending} name="title" required placeholder="Title" className="field" />
 
-        <input
+        <input disabled={pending}
           name="tag"
           required
           placeholder="Tag e.g. Engineering"
           className="field"
         />
 
-        <select name="type" defaultValue="COURSE" className="field">
+        <select disabled={pending} name="type" defaultValue="COURSE" className="field">
           {types.map((type) => (
             <option key={type.value} value={type.value}>
               {type.label}
@@ -87,7 +95,7 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
           ))}
         </select>
 
-        <input
+        <input disabled={pending}
           name="progress"
           type="number"
           min="0"
@@ -96,7 +104,7 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
           className="field"
         />
 
-        <input
+        <input disabled={pending}
           name="url"
           type="url"
           placeholder="URL (optional)"
@@ -135,10 +143,10 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
                     disabled={pending}
                     onClick={() =>
                       start(async () => {
-                        await setResourceCompleted({
+                        try { await setResourceCompleted({
                           id: resource.id,
                           completed: !resource.completed,
-                        });
+                        }); } catch { setError("Could not update the resource. Please try again."); }
                       })
                     }
                     className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-text-secondary hover:bg-white/[0.05]"
@@ -151,7 +159,7 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
                     disabled={pending}
                     onClick={() =>
                       start(async () => {
-                        await removeResource(resource.id);
+                        try { await removeResource(resource.id); } catch { setError("Could not delete the resource. Please try again."); }
                       })
                     }
                     className="rounded-lg border border-red-400/20 px-3 py-1.5 text-[11px] text-red-300 hover:bg-red-400/10"
@@ -183,10 +191,10 @@ export function ResourcesClient({ resources }: { resources: ResourceData[] }) {
                       const value = Number(event.target.value);
 
                       start(async () => {
-                        await setResourceProgress({
+                        try { await setResourceProgress({
                           id: resource.id,
                           progress: value,
-                        });
+                        }); } catch { setError("Could not update progress. Please try again."); }
                       });
                     }}
                     className="w-full accent-indigo-500"

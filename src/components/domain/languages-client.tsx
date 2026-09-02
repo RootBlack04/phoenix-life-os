@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Plus, Minus, BookOpen, Clock3 } from "lucide-react";
 
 import { addLanguageStudySession, setLanguageSkills } from "@/lib/db/actions";
@@ -97,7 +98,9 @@ export function LanguagesClient({
 }: {
   initialLanguages: Language[];
 }) {
-  const [languages, setLanguages] = useState(initialLanguages);
+  const languages = initialLanguages;
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const [openLog, setOpenLog] = useState<string | null>(null);
@@ -113,6 +116,8 @@ export function LanguagesClient({
   });
 
   function adjustSkill(languageId: string, skill: SkillKey, delta: number) {
+    if (pending) return;
+    setError(null);
     const language = languages.find((item) => item.id === languageId);
 
     if (!language) return;
@@ -126,11 +131,8 @@ export function LanguagesClient({
       [skill]: nextValue,
     };
 
-    setLanguages((current) =>
-      current.map((item) => (item.id === languageId ? updated : item)),
-    );
-
     startTransition(async () => {
+      try {
       await setLanguageSkills({
         id: languageId,
         percent: updated.percent,
@@ -141,17 +143,23 @@ export function LanguagesClient({
         writing: updated.writing,
         reading: updated.reading,
       });
+      router.refresh();
+      } catch { setError("Could not save skill progress. The displayed values have not changed."); }
     });
   }
 
   function submitStudySession(language: Language) {
+    if (pending) return;
+    setError(null);
     const minutes = Number(sessionForm.minutes);
 
-    if (!Number.isInteger(minutes) || minutes <= 0) {
+    if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 1440) {
+      setError("Enter a whole number of minutes between 1 and 1440.");
       return;
     }
 
     startTransition(async () => {
+      try {
       await addLanguageStudySession({
         languageId: language.id,
         date: new Date(),
@@ -160,25 +168,7 @@ export function LanguagesClient({
         note: sessionForm.note.trim() || undefined,
       });
 
-      setLanguages((current) =>
-        current.map((item) =>
-          item.id === language.id
-            ? {
-                ...item,
-                studySessions: [
-                  {
-                    id: `local-${Date.now()}`,
-                    date: new Date().toISOString(),
-                    minutes,
-                    skill: sessionForm.skill,
-                    note: sessionForm.note.trim() || null,
-                  },
-                  ...item.studySessions,
-                ],
-              }
-            : item,
-        ),
-      );
+      router.refresh();
 
       setSessionForm({
         minutes: 30,
@@ -187,11 +177,13 @@ export function LanguagesClient({
       });
 
       setOpenLog(null);
+      } catch { setError("Could not save the session. Your input has been kept; please try again."); }
     });
   }
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      {error && <p role="alert" className="col-span-full text-sm text-danger">{error}</p>}
       {languages.map((language) => (
         <Card key={language.id}>
           <div className="flex items-start justify-between mb-5">
@@ -273,7 +265,7 @@ export function LanguagesClient({
               </p>
 
               <p className="text-[10px] text-text-tertiary mt-0.5">
-                Hours logged
+                Stored lifetime hours
               </p>
             </div>
 
@@ -334,7 +326,7 @@ export function LanguagesClient({
             </div>
 
             {openLog === language.id && (
-              <div className="glass rounded-xl p-4 mb-4 space-y-3">
+              <fieldset disabled={pending} className="glass rounded-xl p-4 mb-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-xs text-text-tertiary">
                     Minutes
@@ -399,7 +391,7 @@ export function LanguagesClient({
                 >
                   {pending ? "Saving..." : "Save session"}
                 </button>
-              </div>
+              </fieldset>
             )}
 
             {language.studySessions.length === 0 ? (

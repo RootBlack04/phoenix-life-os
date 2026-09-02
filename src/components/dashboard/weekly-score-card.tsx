@@ -22,7 +22,7 @@ const domainMeta = {
 } as const;
 
 const formatChange = (change: number | null) => {
-  if (change === null) return "No previous score";
+  if (change === null) return "Week-to-date snapshot · not a like-for-like weekly trend";
   if (change === 0) return "No change";
   return `${change > 0 ? "+" : ""}${change} vs last week`;
 };
@@ -77,7 +77,7 @@ export function WeeklyScoreCard({ score }: { score: WeeklyScore }) {
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-3 mb-1">
                       <span className="text-xs text-text-secondary">
-                        {meta.label}
+                        {meta.label}{key === "engineering" ? " · current snapshot" : ""}
                       </span>
                       <span className="text-xs font-medium text-text-primary">
                         {domain.score === null ? "—" : domain.score}
