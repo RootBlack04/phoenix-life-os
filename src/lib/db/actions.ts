@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { JobStage } from "@/generated/prisma/enums";
+import { localMidnight } from "@/lib/dates";
 
 import {
   createHealthMetric,
@@ -18,6 +20,7 @@ import {
   deleteNote,
   toggleHabit,
   updateJobStage,
+  createJobApplication,
   updateLanguageSkills,
   updateNote,
   updateProjectProgress,
@@ -41,7 +44,15 @@ const habitSchema = z.object({
 
 const jobSchema = z.object({
   id: z.string(),
-  stage: z.enum(["APPLIED", "INTERVIEW", "OFFER", "REJECTED"]),
+  stage: z.enum(JobStage),
+});
+
+const createJobApplicationSchema = z.object({
+  company: z.string().trim().min(1, "Company is required").max(200),
+  role: z.string().trim().min(1, "Role is required").max(200),
+  stage: z.enum(JobStage).default(JobStage.APPLIED),
+  // Validate the calendar label before converting it to a local-day instant.
+  appliedOn: z.iso.date().transform((day) => localMidnight(day)),
 });
 
 const projectSchema = z.object({
@@ -179,6 +190,14 @@ export async function setJobStage(input: z.input<typeof jobSchema>) {
 
   revalidatePath("/career");
   revalidatePath("/");
+}
+
+export async function addJobApplication(input: z.input<typeof createJobApplicationSchema>) {
+  const data = createJobApplicationSchema.parse(input);
+  const application = await createJobApplication(data);
+  revalidatePath("/career");
+  revalidatePath("/");
+  return application;
 }
 
 /* -------------------------------------------------------------------------- */

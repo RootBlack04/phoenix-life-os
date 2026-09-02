@@ -25,6 +25,59 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Career creation validates fields, defaults stage, scopes ownership and preserves calendar/week", async () => {
+  const writes = [], paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { jobApplication: {
+    create: async ({ data }) => { writes.push(data); return { id: "real-job", ...data }; },
+    update: async ({ where, data }) => { if (where.userId !== "foreign-user") throw new Error("Not found"); return data; },
+  } } } });
+  const { addJobApplication } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const valid = { company: " Company ", role: " Engineer ", appliedOn: "2026-09-10" };
+  for (const patch of [{ company: " " }, { role: "" }, { company: "x".repeat(201) }, { role: "x".repeat(201) }, { stage: "OTHER" }, { appliedOn: "2026-02-30" }, { appliedOn: "not-date" }, { appliedOn: "" }]) await assert.rejects(() => addJobApplication({ ...valid, ...patch }));
+  assert.equal(writes.length, 0);
+  const saved = await addJobApplication({ ...valid, userId: "foreign-user", notes: "Not exposed" });
+  assert.equal(saved.id, "real-job"); assert.equal(saved.userId, "demo-user"); assert.equal(saved.company, "Company"); assert.equal(saved.role, "Engineer");
+  assert.equal(saved.stage, "APPLIED"); assert.equal(saved.notes, undefined);
+  assert.equal(saved.appliedOn.toISOString(), "2026-09-09T23:00:00.000Z");
+  assert.equal(dates.localDateKey(saved.appliedOn), "2026-09-10");
+  const range = dates.weekTimestampRange("2026-09-07");
+  assert.ok(saved.appliedOn >= range.start && saved.appliedOn < range.endExclusive);
+  for (const stage of ["APPLIED", "INTERVIEW", "OFFER", "REJECTED"]) assert.equal((await addJobApplication({ ...valid, stage })).stage, stage);
+  assert.deepEqual(paths, Array.from({ length: 5 }, () => ["/career", "/"]).flat());
+  await assert.rejects(() => db.updateJobStage("foreign-job", "OFFER"), /Not found/);
+});
+
+test("Career creation form guards duplicates, retains failed drafts, resets only after persistence", async () => {
+  let cursor = 0, calls = 0, refreshes = 0, resolveSave, rejectSave, submitted;
+  const slots = [];
+  const { CareerApplicationForm } = load("src/components/domain/career-application-form.tsx", {
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = value; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/lib/db/actions": { addJobApplication: (input) => { calls++; submitted = input; return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  let tree;
+  const render = () => { cursor = 0; tree = CareerApplicationForm({ today: "2026-09-02" }); };
+  const field = (name) => elements(tree, (node) => node.props.name === name)[0];
+  const type = (name, value) => { field(name).props.onChange({ target: { value } }); render(); };
+  const submit = () => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  render(); assert.equal(field("stage").props.value, "APPLIED"); assert.equal(field("appliedOn").props.value, "2026-09-02");
+  await submit(); assert.equal(calls, 0);
+  type("company", "x".repeat(201)); type("role", "Engineer"); await submit(); render(); assert.equal(calls, 0); assert.equal(field("company").props.value.length, 201);
+  type("company", "Company"); type("stage", "INTERVIEW"); type("appliedOn", "2026-09-10");
+  const failure = submit(); await submit(); render(); assert.equal(calls, 1);
+  assert.equal(elements(tree, (node) => node.type === "fieldset")[0].props.disabled, true);
+  rejectSave(new Error("offline")); await failure; render();
+  for (const [name, value] of Object.entries({ company: "Company", role: "Engineer", stage: "INTERVIEW", appliedOn: "2026-09-10" })) assert.equal(field(name).props.value, value);
+  assert.match(JSON.stringify(tree), /Could not confirm/);
+  const success = submit(); await submit(); assert.equal(calls, 2);
+  assert.equal(submitted.stage, "INTERVIEW"); resolveSave({ id: "real-id", company: "Company" }); await success; render();
+  assert.equal(field("company").props.value, ""); assert.equal(field("stage").props.value, "APPLIED"); assert.equal(refreshes, 2);
+});
+
 test("Career direct stage action validates enum and updates only stage", async () => {
   const writes = [], paths = [];
   const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { jobApplication: {
@@ -36,7 +89,7 @@ test("Career direct stage action validates enum and updates only stage", async (
   const { JobStage } = load("src/generated/prisma/enums.ts");
   for (const stage of Object.values(JobStage)) await setJobStage({ id: "job", stage, company: "Must not change" });
   assert.deepEqual(writes.map((input) => input.data.stage), Object.values(JobStage));
-  assert.ok(writes.every((input) => Object.keys(input.data).join() === "stage" && input.where.id === "job"));
+  assert.ok(writes.every((input) => Object.keys(input.data).join() === "stage" && input.where.id === "job" && input.where.userId === "demo-user"));
   assert.deepEqual(paths, Object.values(JobStage).flatMap(() => ["/career", "/"]));
 });
 

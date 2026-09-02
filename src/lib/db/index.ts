@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import type { JobStage } from "@/generated/prisma/enums";
 import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
 
 import type {
@@ -673,6 +674,21 @@ export async function getCareer() {
   });
 }
 
+export async function createJobApplication(data: {
+  company: string;
+  role: string;
+  stage: JobStage;
+  appliedOn: Date;
+}) {
+  return prisma.jobApplication.create({ data: {
+    userId: DEMO_USER_ID,
+    company: data.company,
+    role: data.role,
+    stage: data.stage,
+    appliedOn: data.appliedOn,
+  } });
+}
+
 /* =========================================================
    INCOME
    ========================================================= */
@@ -1243,6 +1259,7 @@ export async function updateJobStage(
   return prisma.jobApplication.update({
     where: {
       id,
+      userId: DEMO_USER_ID,
     },
 
     data: {

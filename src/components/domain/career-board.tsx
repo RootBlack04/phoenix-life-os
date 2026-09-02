@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { format } from "date-fns";
+import { APP_TIMEZONE } from "@/lib/dates";
 import { setJobStage } from "@/lib/db/actions";
 import { JobStage } from "@/generated/prisma/enums";
 import type { JobApplication } from "@/types";
@@ -10,6 +10,7 @@ const columns = Object.values(JobStage).map((stage) => ({
   key: stage.toLowerCase(),
   label: stage.charAt(0) + stage.slice(1).toLowerCase(),
 }));
+const applicationDate = new Intl.DateTimeFormat("en-US", { timeZone: APP_TIMEZONE, month: "short", day: "numeric", year: "numeric" });
 export function CareerBoard({
   applications,
 }: {
@@ -41,6 +42,7 @@ export function CareerBoard({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
       {error && <p role="alert" className="col-span-full text-xs text-danger">{error}</p>}
+      {applications.length === 0 && <p className="col-span-full text-sm text-text-secondary">No applications yet. Create your first application using the form above.</p>}
       {columns.map((col) => {
         const items = applications.filter((j) => j.stage === col.key);
         return (
@@ -64,7 +66,7 @@ export function CareerBoard({
                   </p>
                   <p className="text-[11px] text-text-tertiary">{j.role}</p>
                   <p className="text-[10px] text-text-tertiary mt-1">
-                    {format(new Date(j.appliedOn), "MMM d")}
+                    {applicationDate.format(new Date(j.appliedOn))}
                   </p>
                   <label htmlFor={`stage-${j.id}`} className="mt-3 block text-[11px] text-text-secondary">Stage</label>
                   <select

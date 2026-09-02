@@ -40,18 +40,53 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
   if (process.env.PHOENIX_CAREER_ONLY === "1") {
-    const original = await prisma.jobApplication.create({ data: {
-      userId: "demo-user", company: marker, role: "Temporary stage verification", stage: "APPLIED",
-      appliedOn: new Date("2026-09-01T12:00:00Z"), salary: "Test salary", location: "Test location",
-      url: "https://example.com", notes: "Temporary record; keep these fields intact",
-    } });
+    const { getWeeklyMetrics } = load("src/lib/analytics/weekly.ts");
+    const metricsBefore = await getWeeklyMetrics(new Date("2026-09-10T12:00:00Z"));
+    await open("/career");
+    const form = page.getByRole("form", { name: "Create Application", exact: true });
+    await form.getByLabel("Company", { exact: true }).fill(marker);
+    await form.getByLabel("Role / Position", { exact: true }).fill("Temporary stage verification");
+    await form.getByLabel("Application date", { exact: true }).fill("2026-09-10");
+    assert.equal(await form.getByLabel("Stage", { exact: true }).inputValue(), "APPLIED");
+    await page.route("**/*", async (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Create Application", exact: true }).click();
+    await form.getByRole("alert").filter({ hasText: "Could not confirm" }).waitFor();
+    assert.equal(await form.getByLabel("Company", { exact: true }).inputValue(), marker);
+    assert.equal(await form.getByLabel("Role / Position", { exact: true }).inputValue(), "Temporary stage verification");
+    assert.equal(await form.getByLabel("Application date", { exact: true }).inputValue(), "2026-09-10");
+    await page.unroute("**/*");
+    let releaseCreate, sawCreate, createPosts = 0;
+    const createHeld = new Promise((resolve) => { releaseCreate = resolve; });
+    const createSeen = new Promise((resolve) => { sawCreate = resolve; });
+    await page.route("**/*", async (route) => {
+      if (route.request().method() === "POST") { createPosts++; sawCreate(); await createHeld; }
+      await route.continue();
+    });
+    await form.getByRole("button", { name: "Create Application", exact: true }).click();
+    await createSeen;
+    assert.equal(await form.getByRole("button", { name: "Creating…", exact: true }).isDisabled(), true);
+    await form.evaluate((element) => element.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    releaseCreate();
+    await page.locator("article").filter({ hasText: marker }).waitFor();
+    await page.unroute("**/*");
+    assert.equal(createPosts, 1);
+    const original = await prisma.jobApplication.findFirstOrThrow({ where: { userId: "demo-user", company: marker } });
     careerTestId = original.id;
+    assert.equal(original.stage, "APPLIED");
+    assert.equal(original.appliedOn.toISOString(), "2026-09-09T23:00:00.000Z");
+    assert.equal(await form.getByLabel("Company", { exact: true }).inputValue(), "");
+    const metricsAfter = await getWeeklyMetrics(new Date("2026-09-10T12:00:00Z"));
+    assert.equal(metricsAfter.current.career.applications, metricsBefore.current.career.applications + 1);
     console.log(`TEMP application ${careerTestId}: ${marker}`);
     const unchangedFields = (record) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== "stage" && key !== "updatedAt"));
     const card = page.locator("article").filter({ hasText: marker });
     const select = card.getByRole("combobox", { name: `Stage for ${marker} — Temporary stage verification`, exact: true });
     await open("/career");
     await select.waitFor();
+    await card.getByText("Sep 10, 2026", { exact: true }).waitFor();
+    await page.reload(); await select.waitFor();
+    await card.getByText("Sep 10, 2026", { exact: true }).waitFor();
+    console.log("PASS creation from form, failed-save retention, duplicate guard, ownership, date, hard refresh and weekly analytics");
     assert.deepEqual(await select.locator("option").evaluateAll((options) => options.map((o) => o.value)), ["APPLIED", "INTERVIEW", "OFFER", "REJECTED"]);
     let posts = 0;
     page.on("request", (request) => { if (request.method() === "POST") posts++; });
@@ -280,6 +315,10 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (process.env.PHOENIX_CAREER_ONLY === "1" && !careerTestId) {
+    const recovered = await prisma.jobApplication.findFirst({ where: { userId: "demo-user", company: marker }, select: { id: true } });
+    careerTestId = recovered?.id;
+  }
   if (careerTestId) {
     const removed = await prisma.jobApplication.deleteMany({ where: { id: careerTestId, userId: "demo-user", company: marker } });
     assert.equal(removed.count, 1);
