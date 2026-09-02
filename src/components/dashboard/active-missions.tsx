@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card, CardHeader } from "@/components/ui/card";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Badge } from "@/components/ui/badge";
@@ -63,6 +64,7 @@ export function ActiveMissions({ missions }: { missions: Mission[] }) {
 
   async function complete(mission: Mission) {
     if (saving.current) return;
+    if (!window.confirm(`Mark “${mission.title}” as complete? You can reopen it from Goals history.`)) return;
     saving.current = true;
     setPending(true);
     setError(null);
@@ -79,9 +81,10 @@ export function ActiveMissions({ missions }: { missions: Mission[] }) {
     }
   }
 
-  return <Card role="region" aria-label="Active Missions">
+  return <Card id="missions" role="region" aria-label="Active Missions">
     <CardHeader title="Active Missions" eyebrow={`${missions.length} in progress`}
       action={<button disabled={pending || editor !== null} onClick={() => edit()} className="min-h-11 text-xs text-accent-blue-soft disabled:opacity-50">Create Goal</button>} />
+    <Link href="/goals" className="mb-3 inline-block text-xs text-accent-blue-soft hover:underline">View all goals</Link>
     {editor && <form onSubmit={submit} aria-label={editor === "new" ? "Create Goal" : "Edit Goal"} className="mb-4 rounded-lg border border-white/10 p-3">
       <fieldset disabled={pending} className="grid min-w-0 grid-cols-1 gap-3 text-xs text-text-secondary">
         <div><label htmlFor="goal-title">Title</label><input id="goal-title" name="title" required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="field mt-1 w-full min-w-0" /></div>

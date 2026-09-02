@@ -24,6 +24,7 @@ import {
   createGoal,
   updateGoal,
   completeGoal,
+  reopenGoal,
   updateLanguageSkills,
   updateNote,
   updateProjectProgress,
@@ -51,6 +52,7 @@ const updateGoalSchema = goalFieldsSchema.extend({ id: z.string().trim().min(1) 
 export async function addGoal(input: z.input<typeof createGoalSchema>) {
   const goal = await createGoal(createGoalSchema.parse(input));
   revalidatePath("/");
+  revalidatePath("/goals");
   return goal;
 }
 
@@ -58,12 +60,21 @@ export async function saveGoal(input: z.input<typeof updateGoalSchema>) {
   const { id, ...data } = updateGoalSchema.parse(input);
   const goal = await updateGoal(id, data);
   revalidatePath("/");
+  revalidatePath("/goals");
   return goal;
 }
 
 export async function markGoalComplete(id: string) {
   const goal = await completeGoal(z.string().trim().min(1).parse(id));
   revalidatePath("/");
+  revalidatePath("/goals");
+  return goal;
+}
+
+export async function reopenCompletedGoal(id: string) {
+  const goal = await reopenGoal(z.string().trim().min(1).parse(id));
+  revalidatePath("/");
+  revalidatePath("/goals");
   return goal;
 }
 

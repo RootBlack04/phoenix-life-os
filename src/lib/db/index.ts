@@ -158,6 +158,22 @@ export async function getGoals() {
 
 type GoalFields = { title: string; description: string | null; progress: number; deadline: Date | null };
 
+// History page includes every non-completed status; Overview keeps its existing
+// IN_PROGRESS-only query and snapshot semantics.
+export async function getGoalHistory(view: "active" | "completed") {
+  return prisma.goal.findMany({
+    where: { userId: DEMO_USER_ID, status: view === "completed" ? "DONE" : { not: "DONE" } },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+  });
+}
+
+export async function reopenGoal(id: string) {
+  return prisma.goal.update({
+    where: { id, userId: DEMO_USER_ID, status: "DONE" },
+    data: { status: "IN_PROGRESS" },
+  });
+}
+
 export async function createGoal(data: GoalFields & { category: LifeAreaKey }) {
   return prisma.goal.create({ data: {
     userId: DEMO_USER_ID, title: data.title, description: data.description,

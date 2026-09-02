@@ -4,6 +4,7 @@ export interface NavItem {
   icon:
     | "LayoutDashboard"
     | "ListTodo"
+    | "Target"
     | "MessageCircle"
     | "Code2"
     | "Briefcase"
@@ -19,6 +20,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { label: "Overview", href: "/", icon: "LayoutDashboard" },
   { label: "Tasks", href: "/tasks", icon: "ListTodo" },
+  { label: "Goals", href: "/goals", icon: "Target" },
   { label: "Languages", href: "/languages", icon: "MessageCircle" },
   { label: "Engineering", href: "/engineering", icon: "Code2" },
   { label: "Career", href: "/career", icon: "Briefcase" },

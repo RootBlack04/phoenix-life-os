@@ -6,6 +6,7 @@ import { useState } from "react";
 import {
   LayoutDashboard,
   ListTodo,
+  Target,
   MessageCircle,
   Code2,
   Briefcase,
@@ -26,6 +27,7 @@ import { cn } from "@/lib/utils";
 const icons = {
   LayoutDashboard,
   ListTodo,
+  Target,
   MessageCircle,
   Code2,
   Briefcase,

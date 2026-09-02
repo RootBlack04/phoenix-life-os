@@ -20,11 +20,86 @@ function load(file, mocks = {}) {
     if (id.startsWith("@/")) return load(`src/${id.slice(2)}.ts`, mocks);
     return require(id);
   };
-  vm.runInNewContext(code, { module: moduleBox, exports: moduleBox.exports, require: localRequire, Date, Intl, console, setTimeout, clearTimeout }, { filename });
+  vm.runInNewContext(code, { module: moduleBox, exports: moduleBox.exports, require: localRequire, Date, Intl, console, setTimeout, clearTimeout, window: mocks.window }, { filename });
   return moduleBox.exports;
 }
 
 const dates = load("src/lib/dates.ts");
+test("Goal history filters ownership/status and reopen preserves the same record", async () => {
+  const rows = ["DONE", "IN_PROGRESS", "BLOCKED", "NOT_STARTED"].map((status, i) => ({ id: String(i), userId: "demo-user", status, progress: 100, title: "Goal", description: "Keep", category: "CAREER", priority: "HIGH", deadline: null }));
+  rows.push({ ...rows[0], id: "foreign", userId: "foreign-user" });
+  const paths = [];
+  const prisma = { goal: {
+    findMany: async ({ where }) => rows.filter((row) => row.userId === where.userId && (typeof where.status === "string" ? row.status === where.status : row.status !== where.status.not)),
+    update: async ({ where, data }) => {
+      const row = rows.find((row) => row.id === where.id && row.userId === where.userId && row.status === where.status);
+      if (!row) throw new Error("Not found");
+      Object.assign(row, data); return row;
+    },
+  } };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  assert.equal((await db.getGoalHistory("active")).length, 3);
+  assert.equal((await db.getGoalHistory("completed")).length, 1);
+  assert.equal((await db.getGoals()).length, 1);
+  const { reopenCompletedGoal } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  await assert.rejects(() => reopenCompletedGoal(" "));
+  await assert.rejects(() => reopenCompletedGoal("foreign"));
+  await assert.rejects(() => reopenCompletedGoal("1"));
+  const before = { ...rows[0] };
+  await reopenCompletedGoal("0");
+  assert.deepEqual(rows[0], { ...before, status: "IN_PROGRESS" });
+  assert.equal(rows.length, 5);
+  assert.equal((await db.getGoalHistory("completed")).length, 0);
+  assert.equal((await db.getGoals()).length, 2);
+  await assert.rejects(() => reopenCompletedGoal("0"));
+  assert.deepEqual(paths, ["/", "/goals"]);
+});
+
+test("Goals page defaults to Active and exposes selected view and empty states honestly", async () => {
+  const views = [];
+  const { default: Page } = load("src/app/goals/page.tsx", {
+    "next/link": "link", "@/components/layout/app-shell": { AppShell: "shell" },
+    "@/components/goals/goals-client": { GoalsClient: "goals" },
+    "@/lib/db": { getGoalHistory: async (view) => { views.push(view); return []; } },
+  });
+  for (const view of [undefined, "completed", "invalid"]) {
+    const tree = await Page({ searchParams: Promise.resolve({ view }) });
+    const selected = elements(tree, (node) => node.props["aria-current"] === "page")[0];
+    assert.equal(selected.props.children, view === "completed" ? "Completed" : "Active");
+  }
+  assert.deepEqual(views, ["active", "completed", "active"]);
+  const missions = fs.readFileSync(path.join(root, "src/components/dashboard/active-missions.tsx"), "utf8");
+  assert.match(missions, /href="\/goals"/);
+  assert.match(missions, /window.confirm/);
+  assert.match(fs.readFileSync(path.join(root, "src/lib/nav.ts"), "utf8"), /label: "Goals", href: "\/goals"/);
+});
+
+test("Goals reopen UI waits for persistence, guards duplicates and handles failure", async () => {
+  let cursor = 0, calls = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], transitions = [];
+  const { GoalsClient } = load("src/components/goals/goals-client.tsx", {
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = value; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/components/ui/card": { Card: "card" }, "@/components/ui/progress-bar": { ProgressBar: "progress" },
+    "@/lib/db/actions": { reopenCompletedGoal: () => { calls++; return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  let goals = [], tree;
+  const render = (view = "completed") => { cursor = 0; tree = GoalsClient({ goals, view }); };
+  render(); assert.match(JSON.stringify(tree), /No completed goals yet/);
+  render("active"); assert.match(JSON.stringify(tree), /No active goals/);
+  goals = [{ id: "g", title: "Retained", category: "CAREER", priority: "MEDIUM", description: null, progress: 100, status: "DONE", deadline: null }];
+  render(); const reopen = () => elements(tree, (node) => node.type === "button")[0].props.onClick();
+  reopen(); reopen(); assert.equal(calls, 1); rejectSave(new Error("offline")); await Promise.all(transitions); render();
+  assert.match(JSON.stringify(tree), /Could not reopen/); assert.equal(elements(tree, (node) => node.type === "article").length, 1);
+  reopen(); resolveSave({}); await Promise.all(transitions); render();
+  assert.equal(refreshes, 2); assert.equal(elements(tree, (node) => node.type === "article").length, 1);
+  goals = []; render(); assert.equal(elements(tree, (node) => node.type === "article").length, 0);
+});
+
 test("Goal actions validate, scope writes, preserve metadata and complete without deleting", async () => {
   let row;
   const paths = [];
@@ -61,14 +136,16 @@ test("Goal actions validate, scope writes, preserve metadata and complete withou
   assert.equal((await db.getGoals()).length, 0);
   await actions.markGoalComplete(row.id); // retained, repeat-safe completion
   await assert.rejects(() => actions.saveGoal({ id: row.id, title: "stale", progress: 0 }));
-  assert.ok(paths.every((route) => route === "/"));
+  assert.deepEqual(paths, Array.from({ length: 5 }, () => ["/", "/goals"]).flat());
 });
 
 test("Missions create/edit/complete preserve failed drafts and wait for server state", async () => {
-  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave, confirmed = false;
   const slots = [], calls = [];
   const mutate = (kind) => (input) => { calls.push({ kind, input }); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); };
   const { ActiveMissions } = load("src/components/dashboard/active-missions.tsx", {
+    "next/link": "link",
+    window: { confirm: () => confirmed },
     react: {
       useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = value; }]; },
       useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
@@ -96,6 +173,9 @@ test("Missions create/edit/complete preserve failed drafts and wait for server s
   type("progress", "50"); type("deadline", "2026-09-10"); const failedEdit = submit(); rejectSave(new Error("offline")); await failedEdit; render();
   assert.equal(field("progress").props.value, "50"); assert.equal(elements(tree, (node) => node.type === "progress")[0].props.percent, 0);
   const edit = submit(); resolveSave({ title: "My goal" }); await edit; render();
+  const beforeComplete = calls.length;
+  await button("Complete").props.onClick(); assert.equal(calls.length, beforeComplete);
+  confirmed = true;
   const failedComplete = button("Complete").props.onClick(); await button("Complete").props.onClick(); rejectSave(new Error("offline")); await failedComplete; render();
   assert.equal(elements(tree, (node) => node.type === "article").length, 1);
   const done = button("Complete").props.onClick(); resolveSave({}); await done; render();
