@@ -181,6 +181,7 @@ export async function createTask(input: CreateTaskInput) {
 export async function updateTaskStatus(
   id: string,
   status: "PENDING" | "IN_PROGRESS" | "DONE",
+  expectedStatus?: "PENDING" | "IN_PROGRESS",
 ) {
   // The status predicate is checked atomically by PostgreSQL. Concurrent DONE
   // retries must not overwrite the completion instant of the first transition.
@@ -188,7 +189,11 @@ export async function updateTaskStatus(
     where: {
       id,
       userId: DEMO_USER_ID,
-      ...(status === "DONE" ? { status: { not: "DONE" as const } } : {}),
+      // Next Action supplies its displayed status, preventing stale Start from
+      // reopening completed work. Existing callers retain their lifecycle.
+      ...(expectedStatus
+        ? { status: expectedStatus }
+        : status === "DONE" ? { status: { not: "DONE" as const } } : {}),
     },
     data: {
       status,

@@ -31,6 +31,7 @@ const marker = `Phoenix verification ${crypto.randomUUID()}`;
 const noteText = `${marker} note`;
 const errors = [];
 let browser, taskId;
+const nextActionIds = [];
 try {
   browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -86,6 +87,33 @@ try {
   await page.reload(); await taskCard.getByText("Completed", { exact: true }).waitFor();
   console.log("PASS real task lifecycle, concurrent DONE retry and hard refresh");
 
+  // Exercise Overview selection without changing any pre-existing task.
+  const earliest = await prisma.task.aggregate({
+    where: { userId: "demo-user", status: { in: ["PENDING", "IN_PROGRESS"] } },
+    _min: { dueDate: true },
+  });
+  const due = new Date(Math.min(earliest._min.dueDate?.getTime() ?? Date.now(), Date.now()) - 86_400_000);
+  for (let index = 0; index < 2; index++) {
+    const nextTask = await db.createTask({ title: `${marker} next ${index}`, priority: "LOW", dueDate: new Date(due.getTime() + index * 1000) });
+    nextActionIds.push(nextTask.id);
+    await db.updateTaskStatus(nextTask.id, "IN_PROGRESS", "PENDING");
+  }
+  await open("/");
+  const nextCard = page.getByRole("region", { name: "Next Action", exact: true });
+  await nextCard.getByText(`${marker} next 0`, { exact: true }).waitFor();
+  await nextCard.getByRole("button", { name: "Complete", exact: true }).click();
+  await nextCard.getByText(`${marker} next 1`, { exact: true }).waitFor();
+  await page.reload();
+  await nextCard.getByText(`${marker} next 1`, { exact: true }).waitFor();
+  assert.equal((await prisma.task.findUniqueOrThrow({ where: { id: nextActionIds[0] } })).status, "DONE");
+  // Simulate another surface completing the displayed task before a stale click.
+  const elsewhere = await db.updateTaskStatus(nextActionIds[1], "DONE");
+  await nextCard.getByRole("button", { name: "Complete", exact: true }).click();
+  await nextCard.getByText(`${marker} next 1`, { exact: true }).waitFor({ state: "hidden" });
+  const afterStale = await prisma.task.findUniqueOrThrow({ where: { id: nextActionIds[1] } });
+  assert.equal(afterStale.completedAt.getTime(), elsewhere.completedAt.getTime());
+  console.log("PASS Next Action completion handoff, hard refresh and stale completion");
+
   await page.setViewportSize({ width: 390, height: 844 });
   const nav = page.getByRole("navigation", { name: "Mobile navigation" });
   const routes = ["/", "/tasks", "/engineering", "/habits", "/health", "/languages", "/career", "/income", "/mindset", "/resources", "/notes", "/settings"];
@@ -98,11 +126,16 @@ try {
     assert.equal(await link.getAttribute("aria-current"), "page");
   }
   console.log("PASS all twelve mobile routes and active states");
+  await open("/");
+  await page.getByRole("region", { name: "Next Action", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  console.log("PASS Next Action mobile layout has no horizontal overflow");
   assert.deepEqual(errors, []);
   console.log("PASS no uncaught browser errors");
 } finally {
   if (browser) await browser.close();
   if (taskId) await prisma.task.deleteMany({ where: { id: taskId, userId: "demo-user", title: marker } });
+  for (const [index, id] of nextActionIds.entries()) await prisma.task.deleteMany({ where: { id, userId: "demo-user", title: `${marker} next ${index}` } });
   // A note may have been persisted even if the browser lost the response.
   const notes = await prisma.note.findMany({ where: { userId: "demo-user", title: noteText }, select: { id: true } });
   for (const note of notes) await prisma.note.deleteMany({ where: { id: note.id, userId: "demo-user", title: noteText } });

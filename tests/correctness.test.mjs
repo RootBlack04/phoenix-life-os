@@ -25,6 +25,52 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Next Action selection is deterministic and does not mutate shared tasks", () => {
+  const { selectNextTask, getNextAction, taskDueState } = load("src/lib/tasks/next-action.ts");
+  const now = new Date("2026-08-30T23:30:00Z");
+  const task = (id, patch = {}) => ({ id, title: id, status: "PENDING", priority: "LOW", dueDate: null, createdAt: new Date("2026-08-01T00:00:00Z"), ...patch });
+  const past = task("past", { dueDate: new Date("2026-08-29T12:00:00Z") });
+  const future = task("future", { dueDate: new Date("2026-09-02T12:00:00Z") });
+  const nearer = task("nearer", { dueDate: new Date("2026-09-01T12:00:00Z") });
+  const progress = task("progress", { status: "IN_PROGRESS" });
+  assert.equal(selectNextTask([past, progress]).id, "progress");
+  assert.equal(selectNextTask([future, past]).id, "past");
+  assert.equal(selectNextTask([future, nearer]).id, "nearer");
+  assert.equal(selectNextTask([task("undated", { priority: "CRITICAL" }), future]).id, "future");
+  for (const status of ["PENDING", "IN_PROGRESS"]) {
+    const tasks = ["LOW", "MEDIUM", "HIGH", "CRITICAL"].map((priority) => task(priority, { status, priority, dueDate: future.dueDate }));
+    assert.equal(selectNextTask(tasks).id, "CRITICAL");
+    assert.deepEqual(tasks.map((item) => item.id), ["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+  }
+  assert.equal(selectNextTask([task("new", { createdAt: new Date("2026-08-02") }), task("old")]).id, "old");
+  assert.equal(selectNextTask([task("b"), task("a")]).id, "a");
+  assert.equal(getNextAction([], now), null);
+  assert.equal(getNextAction([task("done", { status: "DONE" })], now), null);
+  assert.equal(taskDueState(new Date("2026-08-30T23:05:00Z"), now).label, "Due today");
+  assert.equal(taskDueState(past.dueDate, now).overdue, true);
+  assert.match(taskDueState(future.dueDate, now).label, /^Due ·/);
+  assert.equal(taskDueState(null, now).label, null);
+  const finished = { ...progress, status: "DONE" };
+  assert.equal(selectNextTask([finished, past]).id, "past");
+});
+
+test("Next Action expected status prevents stale Start and repeated Complete writes", async () => {
+  let row = { id: "task", userId: "demo-user", status: "PENDING", completedAt: null };
+  const prisma = { task: {
+    updateMany: async ({ where, data }) => {
+      if (where.id !== row.id || where.userId !== row.userId || (typeof where.status === "string" && where.status !== row.status)) return { count: 0 };
+      row = { ...row, ...data }; return { count: 1 };
+    },
+    findFirst: async () => ({ ...row }),
+  } };
+  const { updateTaskStatus } = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  assert.equal((await updateTaskStatus("task", "IN_PROGRESS", "PENDING")).status, "IN_PROGRESS");
+  const done = await updateTaskStatus("task", "DONE", "IN_PROGRESS");
+  assert.equal(done.status, "DONE");
+  assert.equal((await updateTaskStatus("task", "IN_PROGRESS", "PENDING")).status, "DONE");
+  assert.equal((await updateTaskStatus("task", "DONE", "IN_PROGRESS")).completedAt, done.completedAt);
+});
+
 test("Casablanca Monday first hour, exclusive end, and Ramadan offset", () => {
   const summer = dates.weekTimestampRange("2026-08-31");
   assert.equal(summer.start.toISOString(), "2026-08-30T23:00:00.000Z");
@@ -144,6 +190,39 @@ function elements(node, predicate, found = []) {
   }
   return found;
 }
+
+test("Next Action card uses the existing action for Start/Complete and refreshes server props", async () => {
+  const slots = [], calls = [];
+  let cursor = 0, work, refreshes = 0;
+  const { NextAction } = load("src/components/dashboard/next-action.tsx", {
+    react: {
+      useState: (initial) => { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (value) => { slots[index] = value; }]; },
+      useRef: (initial) => { const index = cursor++; return slots[index] ??= { current: initial }; },
+      useTransition: () => [false, (callback) => { work = callback(); }],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "next/link": { __esModule: true, default: "link" },
+    "lucide-react": { Check: "check", Loader2: "loader", Play: "play" },
+    "@/components/ui/card": { Card: "card", CardHeader: "card-header" },
+    "@/lib/db/actions": { setTaskStatus: async (input) => { calls.push(JSON.parse(JSON.stringify(input))); return input; } },
+  });
+  const render = (task) => { cursor = 0; return NextAction({ task }); };
+  const task = { id: "pending", title: "Real task projection", status: "PENDING", priority: "HIGH", due: { label: null, overdue: false } };
+  let tree = render(task);
+  let button = elements(tree, (node) => node.type === "button")[0];
+  assert.match(JSON.stringify(button), /Start/);
+  button.props.onClick(); button.props.onClick(); await work;
+  assert.deepEqual(calls, [{ id: "pending", status: "IN_PROGRESS", expectedStatus: "PENDING" }]);
+  tree = render({ ...task, status: "IN_PROGRESS" });
+  button = elements(tree, (node) => node.type === "button")[0];
+  assert.match(JSON.stringify(button), /Complete/);
+  button.props.onClick(); await work;
+  assert.deepEqual(calls[1], { id: "pending", status: "DONE", expectedStatus: "IN_PROGRESS" });
+  assert.equal(refreshes, 2);
+  tree = render(null);
+  assert.match(JSON.stringify(tree), /No active task right now/);
+  assert.equal(elements(tree, (node) => node.type === "button").length, 0);
+});
 
 test("Quick Notes validation, failure, duplicate guard, newer draft, persisted identity and refresh", async () => {
   let cursor = 0, dirty = false, calls = 0, resolveSave, rejectSave;

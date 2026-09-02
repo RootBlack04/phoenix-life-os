@@ -20,6 +20,8 @@ import { calculateWeeklyScore } from "@/lib/analytics/scores";
 import { generateWeeklyInsights } from "@/lib/analytics/insights";
 import { generateWeeklyPlan } from "@/lib/analytics/planning";
 import { weekTimestampRange } from "@/lib/dates";
+import { getNextAction } from "@/lib/tasks/next-action";
+import { NextAction } from "@/components/dashboard/next-action";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +63,7 @@ export default async function OverviewPage() {
 
   return (
     <AppShell title="Overview">
+      <NextAction task={getNextAction(tasks)} />
       <WeeklyPriorities plan={weeklyPlan} tasks={dashboardTasks} />
 
       <WeeklyExecutionReview

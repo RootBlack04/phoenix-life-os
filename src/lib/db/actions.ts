@@ -59,6 +59,7 @@ const createTaskSchema = z.object({
 const taskStatusSchema = z.object({
   id: z.string().trim().min(1),
   status: z.enum(["PENDING", "IN_PROGRESS", "DONE"]),
+  expectedStatus: z.enum(["PENDING", "IN_PROGRESS"]).optional(),
 });
 
 const incomeSchema = z.object({
@@ -253,7 +254,7 @@ export async function setTaskStatus(
 ) {
   const data = taskStatusSchema.parse(input);
 
-  const task = await updateTaskStatus(data.id, data.status);
+  const task = await updateTaskStatus(data.id, data.status, data.expectedStatus);
 
   revalidatePath("/");
   revalidatePath("/tasks");
