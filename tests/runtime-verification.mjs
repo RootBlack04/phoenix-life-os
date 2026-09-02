@@ -39,7 +39,85 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_CAREER_ONLY === "1") {
+  if (process.env.PHOENIX_GOALS_ONLY === "1") {
+    const baseline = await db.getOverviewData();
+    await open("/");
+    const region = page.getByRole("region", { name: "Active Missions", exact: true });
+    await region.getByRole("button", { name: "Create Goal", exact: true }).click();
+    const form = region.getByRole("form");
+    await form.getByLabel("Title", { exact: true }).fill(marker);
+    await form.getByLabel("Area", { exact: true }).selectOption("CAREER");
+    const failPosts = async () => page.route("**/*", async (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await failPosts();
+    await form.getByRole("button", { name: "Save Goal", exact: true }).click();
+    await region.getByRole("alert").filter({ hasText: "Could not confirm" }).waitFor();
+    assert.equal(await form.getByLabel("Title", { exact: true }).inputValue(), marker);
+    await page.unroute("**/*");
+    let release, saw, posts = 0;
+    const held = new Promise((resolve) => { release = resolve; });
+    const seen = new Promise((resolve) => { saw = resolve; });
+    await page.route("**/*", async (route) => { if (route.request().method() === "POST") { posts++; saw(); await held; } await route.continue(); });
+    await form.getByRole("button", { name: "Save Goal", exact: true }).click();
+    await seen;
+    assert.equal(await form.getByRole("button", { name: "Saving…", exact: true }).isDisabled(), true);
+    await form.evaluate((element) => element.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    release();
+    const card = region.locator("article").filter({ hasText: marker });
+    await card.waitFor(); await page.unroute("**/*"); assert.equal(posts, 1);
+    const original = await prisma.goal.findFirstOrThrow({ where: { userId: "demo-user", title: marker } });
+    console.log(`TEMP goal ${original.id}: ${marker}`);
+    assert.equal(original.status, "IN_PROGRESS"); assert.equal(original.progress, 0);
+    assert.equal(original.deadline, null); assert.equal(original.description, null);
+    await page.reload(); await card.waitFor(); await card.getByText("No deadline", { exact: true }).waitFor();
+    await card.getByRole("button", { name: "Edit Goal", exact: true }).click();
+    await form.getByLabel("Title", { exact: true }).fill(`${marker} edited`);
+    await form.getByLabel("Description (optional)", { exact: true }).fill("Temporary goal description");
+    await form.getByLabel("Progress (%)", { exact: true }).fill("75");
+    await form.getByLabel("Deadline (optional)", { exact: true }).fill("2026-09-10");
+    await failPosts(); await form.getByRole("button", { name: "Save Goal", exact: true }).click();
+    await region.getByRole("alert").filter({ hasText: "Could not confirm" }).waitFor();
+    assert.equal(await form.getByLabel("Progress (%)", { exact: true }).inputValue(), "75");
+    await card.getByText("0%", { exact: true }).waitFor();
+    assert.equal((await prisma.goal.findUniqueOrThrow({ where: { id: original.id } })).progress, 0);
+    await page.unroute("**/*");
+    await form.getByRole("button", { name: "Save Goal", exact: true }).click();
+    await card.getByText("75%", { exact: true }).waitFor();
+    await page.reload(); await card.getByText("75%", { exact: true }).waitFor();
+    await card.getByText("Sep 10, 2026", { exact: true }).waitFor();
+    const edited = await prisma.goal.findUniqueOrThrow({ where: { id: original.id } });
+    assert.equal(edited.title, `${marker} edited`); assert.equal(edited.description, "Temporary goal description");
+    assert.equal(edited.deadline.toISOString(), "2026-09-09T23:00:00.000Z");
+    for (const key of ["id", "userId", "category", "priority", "status"]) assert.equal(edited[key], original[key]);
+    const active = await db.getGoals();
+    const current = await db.getOverviewData();
+    const career = active.filter((goal) => goal.category === "CAREER");
+    assert.equal(current.lifeAreas.find((area) => area.key === "career").percent, Math.round(career.reduce((sum, goal) => sum + goal.progress, 0) / career.length));
+    // Optional fields can be explicitly cleared, not replaced with defaults.
+    await card.getByRole("button", { name: "Edit Goal", exact: true }).click();
+    assert.equal(await form.getByLabel("Description (optional)", { exact: true }).inputValue(), "Temporary goal description");
+    await form.getByLabel("Description (optional)", { exact: true }).fill("");
+    await form.getByLabel("Deadline (optional)", { exact: true }).fill("");
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await form.getByRole("button", { name: "Save Goal", exact: true }).click();
+    await card.getByText("No deadline", { exact: true }).waitFor();
+    const cleared = await prisma.goal.findUniqueOrThrow({ where: { id: original.id } });
+    assert.equal(cleared.description, null); assert.equal(cleared.deadline, null);
+    await failPosts(); await card.getByRole("button", { name: "Complete", exact: true }).click();
+    await region.getByRole("alert").filter({ hasText: "Could not complete" }).waitFor();
+    assert.equal((await prisma.goal.findUniqueOrThrow({ where: { id: original.id } })).status, "IN_PROGRESS");
+    await page.unroute("**/*");
+    await card.getByRole("button", { name: "Complete", exact: true }).click();
+    await card.waitFor({ state: "hidden" }); await page.reload(); await region.waitFor();
+    assert.equal(await card.count(), 0);
+    const done = await prisma.goal.findUniqueOrThrow({ where: { id: original.id } });
+    assert.equal(done.status, "DONE"); assert.equal(done.progress, 100);
+    const after = await db.getOverviewData();
+    assert.equal(after.kpis.find((kpi) => kpi.id === "overall").value, baseline.kpis.find((kpi) => kpi.id === "overall").value);
+    assert.deepEqual(after.lifeAreas, baseline.lifeAreas);
+    assert.deepEqual(errors, []);
+    console.log("PASS Goal create/edit/progress/complete, failure retention, duplicate guard, null/date semantics, hard refresh, unchanged metadata, active-only analytics and mobile layout");
+  } else if (process.env.PHOENIX_CAREER_ONLY === "1") {
     const { getWeeklyMetrics } = load("src/lib/analytics/weekly.ts");
     const metricsBefore = await getWeeklyMetrics(new Date("2026-09-10T12:00:00Z"));
     await open("/career");
@@ -315,6 +393,14 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (process.env.PHOENIX_GOALS_ONLY === "1") {
+    const temporaryGoals = await prisma.goal.findMany({ where: { userId: "demo-user", title: { in: [marker, `${marker} edited`] } }, select: { id: true, title: true } });
+    for (const goal of temporaryGoals) {
+      const removed = await prisma.goal.deleteMany({ where: { id: goal.id, userId: "demo-user", title: goal.title } });
+      assert.equal(removed.count, 1);
+      console.log(`REMOVED temporary goal ${goal.id}`);
+    }
+  }
   if (process.env.PHOENIX_CAREER_ONLY === "1" && !careerTestId) {
     const recovered = await prisma.jobApplication.findFirst({ where: { userId: "demo-user", company: marker }, select: { id: true } });
     careerTestId = recovered?.id;

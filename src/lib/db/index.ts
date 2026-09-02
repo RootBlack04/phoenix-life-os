@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import type { JobStage } from "@/generated/prisma/enums";
+import type { JobStage, LifeAreaKey } from "@/generated/prisma/enums";
 import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
 
 import type {
@@ -153,6 +153,30 @@ export async function getGoals() {
         deadline: "asc",
       },
     ],
+  });
+}
+
+type GoalFields = { title: string; description: string | null; progress: number; deadline: Date | null };
+
+export async function createGoal(data: GoalFields & { category: LifeAreaKey }) {
+  return prisma.goal.create({ data: {
+    userId: DEMO_USER_ID, title: data.title, description: data.description,
+    category: data.category, progress: data.progress, deadline: data.deadline,
+    priority: "MEDIUM", status: "IN_PROGRESS",
+  } });
+}
+
+export async function updateGoal(id: string, data: GoalFields) {
+  return prisma.goal.update({
+    where: { id, userId: DEMO_USER_ID, status: "IN_PROGRESS" },
+    data: { title: data.title, description: data.description, progress: data.progress, deadline: data.deadline },
+  });
+}
+
+export async function completeGoal(id: string) {
+  return prisma.goal.update({
+    where: { id, userId: DEMO_USER_ID },
+    data: { status: "DONE", progress: 100 },
   });
 }
 
@@ -1123,6 +1147,7 @@ export async function getOverviewData() {
   const missions: Mission[] = goals.map((goal) => ({
     id: goal.id,
     title: goal.title,
+    description: goal.description,
 
     category: goal.category.toLowerCase() as Mission["category"],
 

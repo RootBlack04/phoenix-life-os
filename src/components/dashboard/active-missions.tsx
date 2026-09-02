@@ -1,9 +1,107 @@
 "use client";
-import { motion } from "framer-motion";
+import { useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardHeader } from "@/components/ui/card";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Badge } from "@/components/ui/badge";
 import type { Mission } from "@/types";
-import { format } from "date-fns";
-const priorityTone={low:"neutral",medium:"blue",high:"warning",critical:"danger"} as const;
-export function ActiveMissions({ missions }: { missions: Mission[] }) { return <Card><CardHeader title="Active Missions" eyebrow={`${missions.length} in progress`}/><div className="space-y-3">{missions.map((m,i)=><motion.div key={m.id} initial={{opacity:0,x:-8}} animate={{opacity:1,x:0}} transition={{duration:.3,delay:i*.05}} className="flex items-center gap-3"><span className="font-mono-num text-[11px] text-text-tertiary w-6 shrink-0">{String(i+1).padStart(2,"0")}</span><div className="flex-1 min-w-0"><div className="flex items-center justify-between gap-2 mb-1.5"><p className="text-sm font-medium text-text-primary truncate">{m.title}</p><span className="font-mono-num text-xs text-text-secondary shrink-0">{m.progress}%</span></div><ProgressBar percent={m.progress} height={6}/></div><Badge tone={m.deadline ? priorityTone[m.priority] : "neutral"} className="hidden sm:inline-flex shrink-0">{m.deadline ? format(new Date(m.deadline),"MMM d") : "No deadline"}</Badge></motion.div>)}</div></Card>; }
+import { LifeAreaKey } from "@/generated/prisma/enums";
+import { APP_TIMEZONE, localDateKey } from "@/lib/dates";
+import { addGoal, saveGoal, markGoalComplete } from "@/lib/db/actions";
+
+const priorityTone = { low: "neutral", medium: "blue", high: "warning", critical: "danger" } as const;
+const deadlineFormat = new Intl.DateTimeFormat("en-US", { timeZone: APP_TIMEZONE, month: "short", day: "numeric", year: "numeric" });
+const emptyDraft = { title: "", description: "", category: "" as LifeAreaKey | "", progress: "0", deadline: "" };
+
+export function ActiveMissions({ missions }: { missions: Mission[] }) {
+  const router = useRouter();
+  const saving = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [editor, setEditor] = useState<string | null>(null);
+  const [draft, setDraft] = useState(emptyDraft);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  function edit(mission?: Mission) {
+    if (saving.current) return;
+    setError(null);
+    setMessage("");
+    setEditor(mission?.id ?? "new");
+    setDraft(mission ? {
+      title: mission.title, description: mission.description ?? "",
+      category: mission.category.toUpperCase() as LifeAreaKey,
+      progress: String(mission.progress), deadline: mission.deadline ? localDateKey(new Date(mission.deadline)) : "",
+    } : emptyDraft);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving.current || !editor) return;
+    setError(null);
+    const progress = Number(draft.progress);
+    if (!draft.title.trim() || draft.title.trim().length > 200 || draft.description.trim().length > 2000 || !draft.progress.trim() || !Number.isInteger(progress) || progress < 0 || progress > 100 || (editor === "new" && !draft.category)) {
+      setError("Enter a title (1–200 characters), description up to 2,000 characters, an area, and whole-number progress from 0 to 100. Your input has been kept.");
+      return;
+    }
+    saving.current = true;
+    setPending(true);
+    try {
+      const fields = { title: draft.title, description: draft.description, progress, deadline: draft.deadline || null };
+      const saved = editor === "new"
+        ? await addGoal({ ...fields, category: draft.category as LifeAreaKey })
+        : await saveGoal({ ...fields, id: editor });
+      setMessage(`Saved “${saved.title}”.`);
+      setEditor(null);
+      router.refresh();
+    } catch {
+      setError("Could not confirm the save. Your input has been kept. Check the goal and its fields before retrying.");
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  }
+
+  async function complete(mission: Mission) {
+    if (saving.current) return;
+    saving.current = true;
+    setPending(true);
+    setError(null);
+    setMessage("");
+    try {
+      await markGoalComplete(mission.id);
+      setMessage(`Completed “${mission.title}”. The record has been retained.`);
+      router.refresh();
+    } catch {
+      setError(`Could not complete “${mission.title}”. Please try again.`);
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  }
+
+  return <Card role="region" aria-label="Active Missions">
+    <CardHeader title="Active Missions" eyebrow={`${missions.length} in progress`}
+      action={<button disabled={pending || editor !== null} onClick={() => edit()} className="min-h-11 text-xs text-accent-blue-soft disabled:opacity-50">Create Goal</button>} />
+    {editor && <form onSubmit={submit} aria-label={editor === "new" ? "Create Goal" : "Edit Goal"} className="mb-4 rounded-lg border border-white/10 p-3">
+      <fieldset disabled={pending} className="grid min-w-0 grid-cols-1 gap-3 text-xs text-text-secondary">
+        <div><label htmlFor="goal-title">Title</label><input id="goal-title" name="title" required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="field mt-1 w-full min-w-0" /></div>
+        <div><label htmlFor="goal-description">Description (optional)</label><textarea id="goal-description" name="description" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} className="field mt-1 w-full min-w-0 resize-y" /></div>
+        <p className="text-text-tertiary">Title up to 200 characters; description up to 2,000.</p>
+        {editor === "new" && <div><label htmlFor="goal-category">Area</label><select id="goal-category" name="category" required value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as LifeAreaKey })} className="field mt-1 min-h-11 w-full min-w-0"><option value="">Choose an area</option>{Object.values(LifeAreaKey).map((area) => <option key={area} value={area}>{area.charAt(0) + area.slice(1).toLowerCase()}</option>)}</select></div>}
+        <div><label htmlFor="goal-progress">Progress (%)</label><input id="goal-progress" name="progress" type="number" required min={0} max={100} step={1} value={draft.progress} onChange={(event) => setDraft({ ...draft, progress: event.target.value })} className="field mt-1 w-full min-w-0" /></div>
+        <div><label htmlFor="goal-deadline">Deadline (optional)</label><input id="goal-deadline" name="deadline" type="date" value={draft.deadline} onChange={(event) => setDraft({ ...draft, deadline: event.target.value })} className="field mt-1 w-full min-w-0" /></div>
+        <p className="text-text-tertiary">Use Complete to finish a goal; saving progress does not change its status.</p>
+        <div className="flex flex-wrap gap-3"><button type="submit" disabled={pending} className="min-h-11 rounded-lg bg-accent-blue/10 px-3 text-accent-blue-soft disabled:opacity-50">{pending ? "Saving…" : "Save Goal"}</button><button type="button" disabled={pending} onClick={() => { setEditor(null); setError(null); }} className="min-h-11 px-3">Cancel</button></div>
+      </fieldset>
+    </form>}
+    {error && <p role="alert" className="mb-3 text-xs text-danger [overflow-wrap:anywhere]">{error}</p>}
+    <p role="status" aria-live="polite" className="mb-3 text-xs text-text-secondary [overflow-wrap:anywhere]">{pending ? "Saving goal…" : message}</p>
+    {!missions.length && <p className="text-sm text-text-secondary">No active goals. Create your first goal using Create Goal above.</p>}
+    <div className="space-y-3">{missions.map((mission) => <article key={mission.id} className="min-w-0 border-b border-white/10 pb-3 [overflow-wrap:anywhere]">
+      <div className="flex items-start justify-between gap-2"><p className="text-sm font-medium text-text-primary">{mission.title}</p><span className="shrink-0 text-xs text-text-secondary">{mission.progress}%</span></div>
+      <ProgressBar percent={mission.progress} height={6} />
+      <div className="mt-2 flex flex-wrap items-center gap-2"><span className="text-[11px] text-text-tertiary">{mission.category}</span><Badge tone={mission.deadline ? priorityTone[mission.priority] : "neutral"}>{mission.deadline ? deadlineFormat.format(new Date(mission.deadline)) : "No deadline"}</Badge></div>
+      <div className="mt-2 flex flex-wrap gap-3"><button disabled={pending || editor !== null} onClick={() => edit(mission)} className="min-h-11 text-xs text-accent-blue-soft disabled:opacity-50">Edit Goal</button><button disabled={pending || editor !== null} onClick={() => complete(mission)} className="min-h-11 text-xs text-success disabled:opacity-50">Complete</button></div>
+    </article>)}</div>
+  </Card>;
+}

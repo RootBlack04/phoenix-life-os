@@ -46,6 +46,7 @@ export interface KpiMetric {
 export interface Mission {
   id: string;
   title: string;
+  description: string | null;
   category: LifeAreaKey;
   priority: Priority;
   progress: number;

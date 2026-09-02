@@ -25,6 +25,83 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Goal actions validate, scope writes, preserve metadata and complete without deleting", async () => {
+  let row;
+  const paths = [];
+  const prisma = { goal: {
+    create: async ({ data }) => (row = { id: "goal", ...data }),
+    update: async ({ where, data }) => {
+      if (where.id !== row.id || where.userId !== row.userId || (where.status && where.status !== row.status)) throw new Error("Not found");
+      row = { ...row, ...data }; return row;
+    },
+    findMany: async ({ where }) => row && row.userId === where.userId && row.status === where.status ? [row] : [],
+  } };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  const actions = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const valid = { title: " Goal ", category: "CAREER", progress: 0 };
+  for (const patch of [{ title: " " }, { title: "x".repeat(201) }, { description: "x".repeat(2001) }, { progress: -1 }, { progress: 101 }, { progress: 1.5 }, { category: "OTHER" }, { deadline: "2026-02-30" }]) await assert.rejects(() => actions.addGoal({ ...valid, ...patch }));
+  assert.equal(row, undefined);
+  await actions.addGoal({ ...valid, userId: "foreign", status: "DONE" });
+  assert.equal(row.userId, "demo-user"); assert.equal(row.status, "IN_PROGRESS"); assert.equal(row.priority, "MEDIUM");
+  assert.equal(row.description, null); assert.equal(row.deadline, null);
+  await actions.saveGoal({ id: row.id, title: "Edited", description: "Description", progress: 75, deadline: "2026-09-10", category: "INCOME", priority: "HIGH" });
+  assert.equal(row.progress, 75); assert.equal(row.category, "CAREER"); assert.equal(row.priority, "MEDIUM");
+  assert.equal(dates.localDateKey(row.deadline), "2026-09-10");
+  await assert.rejects(() => actions.saveGoal({ id: row.id, title: "bad", progress: 101 }));
+  const own = row;
+  row = { ...row, userId: "foreign" };
+  await assert.rejects(() => actions.markGoalComplete(row.id));
+  await assert.rejects(() => actions.saveGoal({ id: row.id, title: "bad", progress: 1 }));
+  row = own;
+  await actions.saveGoal({ id: row.id, title: row.title, description: "", progress: 75, deadline: null });
+  assert.equal(row.deadline, null); assert.equal(row.description, null);
+  assert.equal((await db.getGoals()).length, 1);
+  await actions.markGoalComplete(row.id);
+  assert.equal(row.status, "DONE"); assert.equal(row.progress, 100); assert.equal(row.title, "Edited");
+  assert.equal((await db.getGoals()).length, 0);
+  await actions.markGoalComplete(row.id); // retained, repeat-safe completion
+  await assert.rejects(() => actions.saveGoal({ id: row.id, title: "stale", progress: 0 }));
+  assert.ok(paths.every((route) => route === "/"));
+});
+
+test("Missions create/edit/complete preserve failed drafts and wait for server state", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [];
+  const mutate = (kind) => (input) => { calls.push({ kind, input }); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); };
+  const { ActiveMissions } = load("src/components/dashboard/active-missions.tsx", {
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = value; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/components/ui/progress-bar": { ProgressBar: "progress" }, "@/components/ui/badge": { Badge: "badge" },
+    "@/lib/db/actions": { addGoal: mutate("create"), saveGoal: mutate("update"), markGoalComplete: mutate("complete") },
+  });
+  let missions = [], tree;
+  const render = () => { cursor = 0; tree = ActiveMissions({ missions }); };
+  const field = (name) => elements(tree, (node) => node.props.name === name)[0];
+  const type = (name, value) => { field(name).props.onChange({ target: { value } }); render(); };
+  const button = (name) => elements(tree, (node) => node.type === "button" && node.props.children === name)[0];
+  const submit = () => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  render(); assert.match(JSON.stringify(tree), /Create your first goal/);
+  button("Create Goal").props.onClick(); render();
+  type("title", "My goal"); type("category", "CAREER"); type("description", "Keep draft");
+  const failed = submit(); await submit(); assert.equal(calls.length, 1); rejectSave(new Error("offline")); await failed; render();
+  assert.equal(field("title").props.value, "My goal"); assert.equal(field("description").props.value, "Keep draft");
+  const saved = submit(); resolveSave({ title: "My goal" }); await saved; render();
+  assert.equal(refreshes, 1); assert.equal(elements(tree, (node) => node.type === "article").length, 0);
+  missions = [{ id: "g", title: "My goal", description: "Keep draft", category: "career", priority: "medium", progress: 0, deadline: null, status: "in-progress" }]; render();
+  button("Edit Goal").props.onClick(); render(); assert.equal(field("description").props.value, "Keep draft");
+  type("progress", "50"); type("deadline", "2026-09-10"); const failedEdit = submit(); rejectSave(new Error("offline")); await failedEdit; render();
+  assert.equal(field("progress").props.value, "50"); assert.equal(elements(tree, (node) => node.type === "progress")[0].props.percent, 0);
+  const edit = submit(); resolveSave({ title: "My goal" }); await edit; render();
+  const failedComplete = button("Complete").props.onClick(); await button("Complete").props.onClick(); rejectSave(new Error("offline")); await failedComplete; render();
+  assert.equal(elements(tree, (node) => node.type === "article").length, 1);
+  const done = button("Complete").props.onClick(); resolveSave({}); await done; render();
+  assert.equal(refreshes, 3); missions = []; render(); assert.equal(elements(tree, (node) => node.type === "article").length, 0);
+});
+
 test("Career creation validates fields, defaults stage, scopes ownership and preserves calendar/week", async () => {
   const writes = [], paths = [];
   const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { jobApplication: {

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { JobStage } from "@/generated/prisma/enums";
+import { JobStage, LifeAreaKey } from "@/generated/prisma/enums";
 import { localMidnight } from "@/lib/dates";
 
 import {
@@ -21,6 +21,9 @@ import {
   toggleHabit,
   updateJobStage,
   createJobApplication,
+  createGoal,
+  updateGoal,
+  completeGoal,
   updateLanguageSkills,
   updateNote,
   updateProjectProgress,
@@ -35,6 +38,34 @@ const noteSchema = z.object({
   tag: z.string().trim().min(1, "Tag is required").max(40),
   pinned: z.boolean(),
 });
+
+const goalFieldsSchema = z.object({
+  title: z.string().trim().min(1, "Title is required").max(200),
+  description: z.string().trim().max(2000).optional().transform((value) => value || null),
+  progress: z.number().int().min(0).max(100),
+  deadline: z.iso.date().nullable().optional().transform((day) => day ? localMidnight(day) : null),
+});
+const createGoalSchema = goalFieldsSchema.extend({ category: z.enum(LifeAreaKey) });
+const updateGoalSchema = goalFieldsSchema.extend({ id: z.string().trim().min(1) });
+
+export async function addGoal(input: z.input<typeof createGoalSchema>) {
+  const goal = await createGoal(createGoalSchema.parse(input));
+  revalidatePath("/");
+  return goal;
+}
+
+export async function saveGoal(input: z.input<typeof updateGoalSchema>) {
+  const { id, ...data } = updateGoalSchema.parse(input);
+  const goal = await updateGoal(id, data);
+  revalidatePath("/");
+  return goal;
+}
+
+export async function markGoalComplete(id: string) {
+  const goal = await completeGoal(z.string().trim().min(1).parse(id));
+  revalidatePath("/");
+  return goal;
+}
 
 const habitSchema = z.object({
   habitId: z.string(),
