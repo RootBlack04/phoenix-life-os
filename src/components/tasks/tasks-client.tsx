@@ -10,9 +10,10 @@ import {
   Play,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition, type FormEvent } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
-import { setTaskStatus } from "@/lib/db/actions";
+import { addTask, setTaskStatus } from "@/lib/db/actions";
+import { dateFromKey } from "@/lib/dates";
 
 type TaskStatus = "PENDING" | "IN_PROGRESS" | "DONE";
 type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -84,18 +85,68 @@ export function TasksClient({ tasks }: { tasks: TaskItem[] }) {
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const statusSaving = useRef(false);
+  const creating = useRef(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdMessage, setCreatedMessage] = useState("");
+  const [draft, setDraft] = useState({ title: "", description: "", priority: "MEDIUM" as TaskPriority, dueDate: "" });
+
+  async function submitTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (creating.current) return;
+    setCreateError(null);
+    setCreatedMessage("");
+    if (!draft.title.trim() || draft.title.trim().length > 200) {
+      setCreateError("Use a title between 1 and 200 characters. Your input has been kept.");
+      return;
+    }
+    if (draft.description.trim().length > 2000) {
+      setCreateError("Use a description of 2,000 characters or fewer. Your input has been kept.");
+      return;
+    }
+    const dueDate = draft.dueDate ? dateFromKey(draft.dueDate) : undefined;
+    if (dueDate && (Number.isNaN(dueDate.getTime()) || dueDate.toISOString().slice(0, 10) !== draft.dueDate)) {
+      setCreateError("Choose a valid calendar date. Your input has been kept.");
+      return;
+    }
+    creating.current = true;
+    setIsCreating(true);
+    try {
+      const saved = await addTask({
+        title: draft.title,
+        description: draft.description || undefined,
+        priority: draft.priority,
+        dueDate,
+      });
+      setDraft({ title: "", description: "", priority: "MEDIUM", dueDate: "" });
+      setCreatedMessage(`Created “${saved.title}”.`);
+      router.refresh();
+    } catch {
+      setCreateError("Could not confirm the save. Your input has been kept. Check the task list before retrying.");
+      router.refresh();
+    } finally {
+      creating.current = false;
+      setIsCreating(false);
+    }
+  }
 
   function updateStatus(task: TaskItem, status: TaskStatus) {
+    if (statusSaving.current || task.status === "DONE") return;
+    const expectedStatus = task.status;
+    statusSaving.current = true;
     setPendingTaskId(task.id);
     setError(null);
 
     startTransition(async () => {
       try {
-        await setTaskStatus({ id: task.id, status });
-        router.refresh();
+        const saved = await setTaskStatus({ id: task.id, status, expectedStatus });
+        if (saved.status !== status) setError("This task changed elsewhere. Showing the latest task state.");
       } catch {
         setError(`Could not update “${task.title}”. Please try again.`);
       } finally {
+        router.refresh();
+        statusSaving.current = false;
         setPendingTaskId(null);
       }
     });
@@ -122,6 +173,52 @@ export function TasksClient({ tasks }: { tasks: TaskItem[] }) {
         </p>
       </div>
 
+      <Card>
+        <CardHeader title="Create Task" eyebrow="Add your own work" />
+        <form onSubmit={submitTask} aria-label="Create Task">
+          <fieldset disabled={isCreating} className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="min-w-0 text-xs text-text-secondary sm:col-span-2">
+              <label htmlFor="task-title">Title</label>
+              <input id="task-title" required name="title" value={draft.title}
+                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                aria-describedby="task-title-help" className="field mt-1 w-full min-w-0" />
+              <span id="task-title-help" className="mt-1 block text-text-tertiary">Required · up to 200 characters</span>
+            </div>
+            <div className="min-w-0 text-xs text-text-secondary sm:col-span-2">
+              <label htmlFor="task-description">Description (optional)</label>
+              <textarea id="task-description" name="description" rows={2} value={draft.description}
+                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+                aria-describedby="task-description-help" className="field mt-1 w-full min-w-0 resize-y" />
+              <span id="task-description-help" className="mt-1 block text-text-tertiary">Up to 2,000 characters</span>
+            </div>
+            <div className="min-w-0 text-xs text-text-secondary">
+              <label htmlFor="task-priority">Priority</label>
+              <select id="task-priority" name="priority" value={draft.priority}
+                onChange={(event) => setDraft({ ...draft, priority: event.target.value as TaskPriority })}
+                className="field mt-1 w-full min-w-0">
+                <option value="LOW">Low</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="HIGH">High</option>
+                <option value="CRITICAL">Critical</option>
+              </select>
+            </div>
+            <div className="min-w-0 text-xs text-text-secondary">
+              <label htmlFor="task-due-date">Due date (optional)</label>
+              <input id="task-due-date" name="dueDate" type="date" value={draft.dueDate}
+                onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })}
+                className="field mt-1 w-full min-w-0" />
+            </div>
+            <button type="submit" disabled={isCreating}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent-blue/25 bg-accent-blue/10 px-4 py-2 text-sm font-medium text-accent-blue-soft hover:bg-accent-blue/15 disabled:cursor-wait disabled:opacity-60 sm:col-span-2">
+              {isCreating && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isCreating ? "Creating…" : "Create Task"}
+            </button>
+          </fieldset>
+          {createError && <p role="alert" className="mt-3 text-xs text-danger">{createError}</p>}
+          <p role="status" aria-live="polite" className="mt-2 text-xs text-text-secondary [overflow-wrap:anywhere]">{createdMessage}</p>
+        </form>
+      </Card>
+
       {error && (
         <div
           role="alert"
@@ -139,7 +236,7 @@ export function TasksClient({ tasks }: { tasks: TaskItem[] }) {
               No tasks yet
             </p>
             <p className="mt-1 text-xs text-text-tertiary">
-              Tasks you create from Weekly Priorities will appear here.
+              Create a task above, or create one from Weekly Priorities on Overview.
             </p>
           </div>
         </Card>
@@ -179,7 +276,7 @@ export function TasksClient({ tasks }: { tasks: TaskItem[] }) {
                       return (
                         <article
                           key={task.id}
-                          className="rounded-xl border border-white/10 bg-white/[0.025] p-4"
+                          className="min-w-0 rounded-xl border border-white/10 bg-white/[0.025] p-4 [overflow-wrap:anywhere]"
                         >
                           <div className="flex flex-wrap items-center gap-2">
                             <span

@@ -30,8 +30,9 @@ const base = "http://localhost:3001";
 const marker = `Phoenix verification ${crypto.randomUUID()}`;
 const noteText = `${marker} note`;
 const errors = [];
-let browser, taskId;
+let browser, taskId, optionalTaskId;
 const nextActionIds = [];
+const tasksOnly = process.env.PHOENIX_TASKS_ONLY === "1";
 try {
   browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -46,6 +47,7 @@ try {
   assert.equal(await aside.getByRole("link", { name: "Tasks", exact: true }).count(), 1);
   console.log("PASS sidebar named links and manual toggle");
 
+  if (!tasksOnly) {
   const input = page.getByRole("textbox", { name: "Quick note", exact: true });
   const add = page.getByRole("button", { name: "Add note", exact: true });
   await input.fill("x".repeat(121)); await add.click();
@@ -68,11 +70,60 @@ try {
   await page.reload(); await page.getByText(noteText, { exact: true }).waitFor();
   assert.equal(await prisma.note.count({ where: { userId: "demo-user", title: noteText } }), 1);
   console.log("PASS Quick Notes real save and hard refresh");
+  }
 
-  const created = await db.createTask({ title: marker, description: "Temporary lifecycle verification", priority: "LOW" });
-  taskId = created.id;
   await open("/tasks");
+  const form = page.getByRole("form", { name: "Create Task", exact: true });
+  const fillTask = async (title, dueDate = "", priority = "MEDIUM", description = "") => {
+    await form.getByLabel("Title", { exact: true }).fill(title);
+    await form.getByLabel("Description (optional)", { exact: true }).fill(description);
+    await form.getByLabel("Priority", { exact: true }).selectOption(priority);
+    await form.getByLabel("Due date (optional)", { exact: true }).fill(dueDate);
+  };
+  await fillTask("x".repeat(201));
+  await form.getByRole("button", { name: "Create Task", exact: true }).click();
+  await form.getByRole("alert").filter({ hasText: "200 characters" }).waitFor();
+  assert.equal((await form.getByLabel("Title", { exact: true }).inputValue()).length, 201);
+  await fillTask(marker, "2026-09-10", "HIGH", "Temporary lifecycle verification");
+  await page.route("**/*", async (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+  await form.getByRole("button", { name: "Create Task", exact: true }).click();
+  await form.getByRole("alert").filter({ hasText: "Could not confirm" }).waitFor();
+  assert.equal(await form.getByLabel("Title", { exact: true }).inputValue(), marker);
+  assert.equal(await form.getByLabel("Description (optional)", { exact: true }).inputValue(), "Temporary lifecycle verification");
+  assert.equal(await form.getByLabel("Due date (optional)", { exact: true }).inputValue(), "2026-09-10");
+  assert.equal(await form.getByLabel("Priority", { exact: true }).inputValue(), "HIGH");
+  await page.unroute("**/*");
+  // Hold the request while verifying the form is disabled; a second submit event
+  // must not dispatch another action, even before a re-render.
+  let releasePost, postSeen;
+  const seen = new Promise((resolve) => { postSeen = resolve; });
+  const held = new Promise((resolve) => { releasePost = resolve; });
+  let posts = 0;
+  await page.route("**/*", async (route) => {
+    if (route.request().method() === "POST") { posts++; postSeen(); await held; }
+    await route.continue();
+  });
+  await form.getByRole("button", { name: "Create Task", exact: true }).click();
+  await seen;
+  assert.equal(await form.getByRole("button", { name: "Creating…", exact: true }).isDisabled(), true);
+  await form.evaluate((element) => element.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  releasePost();
   const taskCard = page.locator("article").filter({ hasText: marker });
+  await taskCard.getByRole("button", { name: "Start Task", exact: true }).waitFor();
+  await page.unroute("**/*");
+  assert.equal(posts, 1);
+  const createdRows = await prisma.task.findMany({ where: { userId: "demo-user", title: marker } });
+  assert.equal(createdRows.length, 1);
+  const created = createdRows[0]; taskId = created.id;
+  console.log(`TEMP task ${taskId}: ${marker}`);
+  assert.equal(created.status, "PENDING"); assert.equal(created.priority, "HIGH");
+  assert.equal(created.dueDate.toISOString(), "2026-09-10T00:00:00.000Z");
+  assert.equal(created.completedAt, null);
+  assert.equal(await form.getByLabel("Title", { exact: true }).inputValue(), "");
+  await taskCard.getByText("Due Sep 10, 2026", { exact: true }).waitFor();
+  await page.reload(); await taskCard.getByRole("button", { name: "Start Task", exact: true }).waitFor();
+  await taskCard.getByText("Due Sep 10, 2026", { exact: true }).waitFor();
+  console.log("PASS manual creation, draft retention, duplicate guard, calendar date, server/hard refresh");
   await taskCard.getByRole("button", { name: "Start Task", exact: true }).click();
   await taskCard.getByRole("button", { name: "Complete", exact: true }).waitFor();
   await page.reload(); await taskCard.getByRole("button", { name: "Complete", exact: true }).waitFor();
@@ -87,6 +138,21 @@ try {
   await page.reload(); await taskCard.getByText("Completed", { exact: true }).waitFor();
   console.log("PASS real task lifecycle, concurrent DONE retry and hard refresh");
 
+  await fillTask(`${marker} optional`);
+  await form.getByRole("button", { name: "Create Task", exact: true }).click();
+  const optionalCard = page.locator("article").filter({ hasText: `${marker} optional` });
+  await optionalCard.getByRole("button", { name: "Start Task", exact: true }).waitFor();
+  const optional = await prisma.task.findFirstOrThrow({ where: { userId: "demo-user", title: `${marker} optional` } });
+  optionalTaskId = optional.id;
+  console.log(`TEMP task ${optionalTaskId}: ${marker} optional`);
+  assert.equal(optional.description, null); assert.equal(optional.dueDate, null); assert.equal(optional.priority, "MEDIUM");
+  const doneElsewhere = await db.updateTaskStatus(optional.id, "DONE");
+  await optionalCard.getByRole("button", { name: "Start Task", exact: true }).click();
+  await optionalCard.getByText("Completed", { exact: true }).waitFor();
+  const stillDone = await prisma.task.findUniqueOrThrow({ where: { id: optional.id } });
+  assert.equal(stillDone.status, "DONE"); assert.equal(stillDone.completedAt.getTime(), doneElsewhere.completedAt.getTime());
+  console.log("PASS omitted fields and stale /tasks Start cannot reopen completed work");
+
   // Exercise Overview selection without changing any pre-existing task.
   const earliest = await prisma.task.aggregate({
     where: { userId: "demo-user", status: { in: ["PENDING", "IN_PROGRESS"] } },
@@ -94,8 +160,12 @@ try {
   });
   const due = new Date(Math.min(earliest._min.dueDate?.getTime() ?? Date.now(), Date.now()) - 86_400_000);
   for (let index = 0; index < 2; index++) {
-    const nextTask = await db.createTask({ title: `${marker} next ${index}`, priority: "LOW", dueDate: new Date(due.getTime() + index * 1000) });
+    await fillTask(`${marker} next ${index}`, due.toISOString().slice(0, 10), "LOW");
+    await form.getByRole("button", { name: "Create Task", exact: true }).click();
+    await page.locator("article").filter({ hasText: `${marker} next ${index}` }).getByRole("button", { name: "Start Task", exact: true }).waitFor();
+    const nextTask = await prisma.task.findFirstOrThrow({ where: { userId: "demo-user", title: `${marker} next ${index}` } });
     nextActionIds.push(nextTask.id);
+    console.log(`TEMP task ${nextTask.id}: ${nextTask.title}`);
     await db.updateTaskStatus(nextTask.id, "IN_PROGRESS", "PENDING");
   }
   await open("/");
@@ -116,7 +186,7 @@ try {
 
   await page.setViewportSize({ width: 390, height: 844 });
   const nav = page.getByRole("navigation", { name: "Mobile navigation" });
-  const routes = ["/", "/tasks", "/engineering", "/habits", "/health", "/languages", "/career", "/income", "/mindset", "/resources", "/notes", "/settings"];
+  const routes = tasksOnly ? ["/", "/tasks"] : ["/", "/tasks", "/engineering", "/habits", "/health", "/languages", "/career", "/income", "/mindset", "/resources", "/notes", "/settings"];
   for (const href of routes) {
     const link = nav.locator(`a[href="${href}"]`);
     if (!await link.isVisible()) await nav.getByText("More", { exact: true }).click();
@@ -125,7 +195,11 @@ try {
     if (!await link.isVisible()) await nav.getByText("More", { exact: true }).click();
     assert.equal(await link.getAttribute("aria-current"), "page");
   }
-  console.log("PASS all twelve mobile routes and active states");
+  console.log(`PASS ${routes.length} mobile routes and active states`);
+  await open("/tasks");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await form.getByRole("button", { name: "Create Task", exact: true }).waitFor();
+  console.log("PASS Tasks form and groups have no mobile overflow");
   await open("/");
   await page.getByRole("region", { name: "Next Action", exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -134,8 +208,12 @@ try {
   console.log("PASS no uncaught browser errors");
 } finally {
   if (browser) await browser.close();
-  if (taskId) await prisma.task.deleteMany({ where: { id: taskId, userId: "demo-user", title: marker } });
-  for (const [index, id] of nextActionIds.entries()) await prisma.task.deleteMany({ where: { id, userId: "demo-user", title: `${marker} next ${index}` } });
+  // Recover exact IDs even if a save succeeded but the browser lost its response.
+  const temporary = await prisma.task.findMany({ where: { userId: "demo-user", title: { in: [marker, `${marker} optional`, `${marker} next 0`, `${marker} next 1`] } }, select: { id: true, title: true } });
+  for (const task of temporary) {
+    await prisma.task.deleteMany({ where: { id: task.id, userId: "demo-user", title: task.title } });
+    console.log(`REMOVED temporary task ${task.id}`);
+  }
   // A note may have been persisted even if the browser lost the response.
   const notes = await prisma.note.findMany({ where: { userId: "demo-user", title: noteText }, select: { id: true } });
   for (const note of notes) await prisma.note.deleteMany({ where: { id: note.id, userId: "demo-user", title: noteText } });

@@ -25,6 +25,93 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("manual task creation reuses server validation, owner, defaults and revalidation", async () => {
+  const writes = [], paths = [];
+  const prisma = { task: { create: async ({ data }) => {
+    writes.push(data);
+    return { id: "persisted", status: "PENDING", completedAt: null, ...data };
+  } } };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  const { addTask } = load("src/lib/db/actions.ts", {
+    "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) },
+  });
+  for (const patch of [{ title: "" }, { title: "   " }, { title: "x".repeat(201) }, { description: "x".repeat(2001) }, { priority: "INVALID" }, { dueDate: "not-a-date" }]) {
+    await assert.rejects(() => addTask({ title: "Valid", priority: "MEDIUM", ...patch }));
+  }
+  assert.equal(writes.length, 0);
+  const minimal = await addTask({ title: "  My work  ", priority: "MEDIUM" });
+  assert.equal(minimal.title, "My work");
+  assert.equal(minimal.userId, "demo-user");
+  assert.equal(minimal.status, "PENDING");
+  assert.equal(minimal.description, undefined);
+  assert.equal(minimal.dueDate, undefined);
+  for (const priority of ["LOW", "MEDIUM", "HIGH", "CRITICAL"]) {
+    const saved = await addTask({ title: "x".repeat(200), description: "y".repeat(2000), priority, dueDate: dates.dateFromKey("2026-09-10") });
+    assert.equal(saved.priority, priority);
+    assert.equal(saved.description.length, 2000);
+    assert.equal(saved.dueDate.toISOString(), "2026-09-10T00:00:00.000Z");
+    assert.equal(dates.localDateKey(saved.dueDate), "2026-09-10");
+    const { getNextAction } = load("src/lib/tasks/next-action.ts");
+    assert.match(getNextAction([{ ...saved, createdAt: new Date() }], new Date("2026-09-01")).due.label, /10 Sept? 2026/);
+  }
+  assert.deepEqual(paths, Array.from({ length: 5 }, () => ["/", "/tasks"]).flat());
+});
+
+test("Tasks form preserves failed/invalid drafts, guards duplicate submit and uses server refresh", async () => {
+  let cursor = 0, calls = 0, refreshes = 0, resolveSave, rejectSave, submitted;
+  const slots = [], transitions = [], statusCalls = [];
+  const hooks = {
+    useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = typeof value === "function" ? value(slots[i]) : value; }]; },
+    useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+    useTransition: () => [false, (fn) => transitions.push(fn())],
+  };
+  const { TasksClient } = load("src/components/tasks/tasks-client.tsx", {
+    react: hooks, "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "lucide-react": {}, "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/lib/db/actions": {
+      addTask: (input) => { calls++; submitted = input; return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); },
+      setTaskStatus: async (input) => { statusCalls.push(input); return { status: "DONE" }; },
+    },
+  });
+  let tree, tasks = [];
+  const render = () => { cursor = 0; tree = TasksClient({ tasks }); };
+  const field = (name) => elements(tree, (node) => node.props.name === name)[0];
+  const type = (name, value) => { field(name).props.onChange({ target: { value } }); render(); };
+  const submit = () => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  render();
+  assert.match(JSON.stringify(tree), /Create a task above/);
+  await submit(); render(); assert.equal(calls, 0);
+  type("title", "x".repeat(201)); await submit(); render(); assert.equal(calls, 0); assert.equal(field("title").props.value.length, 201);
+  type("title", "My own task"); type("description", "x".repeat(2001)); await submit(); render(); assert.equal(calls, 0);
+  type("description", "Keep this description"); type("dueDate", "2026-02-30"); await submit(); render(); assert.equal(calls, 0);
+  type("dueDate", "2026-09-10"); type("priority", "HIGH");
+  const failed = submit(); await submit(); render(); assert.equal(calls, 1);
+  assert.equal(elements(tree, (node) => node.type === "fieldset")[0].props.disabled, true);
+  rejectSave(new Error("offline")); await failed; render();
+  assert.equal(field("title").props.value, "My own task");
+  assert.equal(field("description").props.value, "Keep this description");
+  assert.equal(field("priority").props.value, "HIGH");
+  assert.equal(field("dueDate").props.value, "2026-09-10");
+  assert.match(JSON.stringify(tree), /Could not confirm the save/);
+  const saving = submit(); await submit(); assert.equal(calls, 2);
+  assert.equal(submitted.dueDate.toISOString(), "2026-09-10T00:00:00.000Z");
+  resolveSave({ id: "real-id", title: "My own task" }); await saving; render();
+  assert.equal(field("title").props.value, ""); assert.equal(field("priority").props.value, "MEDIUM");
+  assert.equal(refreshes, 2);
+  assert.equal(elements(tree, (node) => node.type === "article").length, 0); // No fake optimistic record.
+  tasks = [{ id: "real-id", title: "My own task", description: null, priority: "HIGH", status: "PENDING", dueDate: submitted.dueDate.toISOString() }];
+  render(); assert.equal(elements(tree, (node) => node.type === "article")[0].key, "real-id");
+  assert.match(JSON.stringify(tree), /Sep 10, 2026/);
+  const start = elements(tree, (node) => node.type === "button" && JSON.stringify(node.props.children).includes("Start Task"))[0];
+  start.props.onClick(); start.props.onClick(); await Promise.all(transitions); render();
+  assert.equal(statusCalls.length, 1); assert.equal(statusCalls[0].expectedStatus, "PENDING");
+  assert.match(JSON.stringify(tree), /changed elsewhere/);
+  tasks = [{ ...tasks[0], status: "IN_PROGRESS" }]; render();
+  elements(tree, (node) => node.type === "button" && JSON.stringify(node.props.children).includes('"Complete"'))[0].props.onClick();
+  await Promise.all(transitions);
+  assert.equal(statusCalls[1].expectedStatus, "IN_PROGRESS");
+});
+
 test("Next Action selection is deterministic and does not mutate shared tasks", () => {
   const { selectNextTask, getNextAction, taskDueState } = load("src/lib/tasks/next-action.ts");
   const now = new Date("2026-08-30T23:30:00Z");
