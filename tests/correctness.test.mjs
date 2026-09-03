@@ -25,6 +25,31 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Goal complete/reopen preserves 45, 80 and 100; editable non-DONE statuses stay intact", async () => {
+  let row;
+  const prisma = { goal: {
+    update: async ({ where, data }) => {
+      assert.equal(where.userId, "demo-user"); assert.equal(where.id, row.id);
+      if (typeof where.status === "string" && where.status !== row.status) throw new Error("Invalid status");
+      if (where.status?.not === row.status) throw new Error("Invalid status");
+      if (data.status === "DONE") assert.deepEqual(Object.keys(data), ["status"]);
+      row = { ...row, ...data }; return row;
+    },
+  } };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  for (const progress of [45, 80, 100]) {
+    row = { id: "g", userId: "demo-user", title: "Keep", category: "CAREER", priority: "HIGH", status: "IN_PROGRESS", progress, deadline: null, description: null };
+    const before = { ...row };
+    await db.completeGoal(row.id); assert.deepEqual(row, { ...before, status: "DONE" });
+    await db.reopenGoal(row.id); assert.deepEqual(row, before);
+  }
+  for (const status of ["NOT_STARTED", "BLOCKED", "IN_PROGRESS"]) {
+    row.status = status;
+    await db.updateGoal(row.id, { title: "Edited", description: null, deadline: null, progress: 45 });
+    assert.equal(row.status, status); assert.equal(row.progress, 45);
+  }
+});
+
 test("Goal history filters ownership/status and reopen preserves the same record", async () => {
   const rows = ["DONE", "IN_PROGRESS", "BLOCKED", "NOT_STARTED"].map((status, i) => ({ id: String(i), userId: "demo-user", status, progress: 100, title: "Goal", description: "Keep", category: "CAREER", priority: "HIGH", deadline: null }));
   rows.push({ ...rows[0], id: "foreign", userId: "foreign-user" });
@@ -68,7 +93,7 @@ test("Goals page defaults to Active and exposes selected view and empty states h
     assert.equal(selected.props.children, view === "completed" ? "Completed" : "Active");
   }
   assert.deepEqual(views, ["active", "completed", "active"]);
-  const missions = fs.readFileSync(path.join(root, "src/components/dashboard/active-missions.tsx"), "utf8");
+  const missions = fs.readFileSync(path.join(root, "src/components/goals/goal-manager.tsx"), "utf8");
   assert.match(missions, /href="\/goals"/);
   assert.match(missions, /window.confirm/);
   assert.match(fs.readFileSync(path.join(root, "src/lib/nav.ts"), "utf8"), /label: "Goals", href: "\/goals"/);
@@ -78,6 +103,7 @@ test("Goals reopen UI waits for persistence, guards duplicates and handles failu
   let cursor = 0, calls = 0, refreshes = 0, resolveSave, rejectSave;
   const slots = [], transitions = [];
   const { GoalsClient } = load("src/components/goals/goals-client.tsx", {
+    "@/components/goals/goal-manager": { GoalManager: "manager" },
     react: {
       useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (value) => { slots[i] = value; }]; },
       useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
@@ -90,7 +116,7 @@ test("Goals reopen UI waits for persistence, guards duplicates and handles failu
   let goals = [], tree;
   const render = (view = "completed") => { cursor = 0; tree = GoalsClient({ goals, view }); };
   render(); assert.match(JSON.stringify(tree), /No completed goals yet/);
-  render("active"); assert.match(JSON.stringify(tree), /No active goals/);
+  render("active"); assert.equal(tree.type, "manager"); assert.equal(tree.props.missions.length, 0);
   goals = [{ id: "g", title: "Retained", category: "CAREER", priority: "MEDIUM", description: null, progress: 100, status: "DONE", deadline: null }];
   render(); const reopen = () => elements(tree, (node) => node.type === "button")[0].props.onClick();
   reopen(); reopen(); assert.equal(calls, 1); rejectSave(new Error("offline")); await Promise.all(transitions); render();
@@ -106,7 +132,7 @@ test("Goal actions validate, scope writes, preserve metadata and complete withou
   const prisma = { goal: {
     create: async ({ data }) => (row = { id: "goal", ...data }),
     update: async ({ where, data }) => {
-      if (where.id !== row.id || where.userId !== row.userId || (where.status && where.status !== row.status)) throw new Error("Not found");
+      if (where.id !== row.id || where.userId !== row.userId || (typeof where.status === "string" && where.status !== row.status) || (where.status?.not && where.status.not === row.status)) throw new Error("Not found");
       row = { ...row, ...data }; return row;
     },
     findMany: async ({ where }) => row && row.userId === where.userId && row.status === where.status ? [row] : [],
@@ -132,7 +158,7 @@ test("Goal actions validate, scope writes, preserve metadata and complete withou
   assert.equal(row.deadline, null); assert.equal(row.description, null);
   assert.equal((await db.getGoals()).length, 1);
   await actions.markGoalComplete(row.id);
-  assert.equal(row.status, "DONE"); assert.equal(row.progress, 100); assert.equal(row.title, "Edited");
+  assert.equal(row.status, "DONE"); assert.equal(row.progress, 75); assert.equal(row.title, "Edited");
   assert.equal((await db.getGoals()).length, 0);
   await actions.markGoalComplete(row.id); // retained, repeat-safe completion
   await assert.rejects(() => actions.saveGoal({ id: row.id, title: "stale", progress: 0 }));
@@ -143,7 +169,7 @@ test("Missions create/edit/complete preserve failed drafts and wait for server s
   let cursor = 0, refreshes = 0, resolveSave, rejectSave, confirmed = false;
   const slots = [], calls = [];
   const mutate = (kind) => (input) => { calls.push({ kind, input }); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); };
-  const { ActiveMissions } = load("src/components/dashboard/active-missions.tsx", {
+  const { GoalManager: ActiveMissions } = load("src/components/goals/goal-manager.tsx", {
     "next/link": "link",
     window: { confirm: () => confirmed },
     react: {

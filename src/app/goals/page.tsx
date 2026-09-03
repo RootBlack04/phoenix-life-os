@@ -18,10 +18,10 @@ export default async function GoalsPage({ searchParams }: { searchParams: Promis
           {item === "active" ? "Active" : "Completed"}
         </Link>)}
       </nav>
-      <Link href="/#missions" className="text-sm text-accent-blue-soft hover:underline">Create or edit goals on Overview</Link>
+      <Link href="/#missions" className="text-sm text-accent-blue-soft hover:underline">Overview Missions</Link>
     </div>
     <p className="text-sm text-text-secondary">{view === "completed"
-      ? "Retained completed goals, not a version history. Exact completion dates are not recorded. Reopening keeps progress unchanged; you can edit it on Overview."
+      ? "Retained completed goals, not a version history. Exact completion dates are not recorded. Reopening keeps progress unchanged; edit it in Active."
       : "All non-completed goals, including not-started and blocked goals. Overview shows in-progress goals."}</p>
     <GoalsClient key={view} view={view} goals={goals.map((goal) => ({
       id: goal.id, title: goal.title, description: goal.description, category: goal.category,

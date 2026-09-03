@@ -184,7 +184,7 @@ export async function createGoal(data: GoalFields & { category: LifeAreaKey }) {
 
 export async function updateGoal(id: string, data: GoalFields) {
   return prisma.goal.update({
-    where: { id, userId: DEMO_USER_ID, status: "IN_PROGRESS" },
+    where: { id, userId: DEMO_USER_ID, status: { not: "DONE" } },
     data: { title: data.title, description: data.description, progress: data.progress, deadline: data.deadline },
   });
 }
@@ -192,7 +192,7 @@ export async function updateGoal(id: string, data: GoalFields) {
 export async function completeGoal(id: string) {
   return prisma.goal.update({
     where: { id, userId: DEMO_USER_ID },
-    data: { status: "DONE", progress: 100 },
+    data: { status: "DONE" },
   });
 }
 
