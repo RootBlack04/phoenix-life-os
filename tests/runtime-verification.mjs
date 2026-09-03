@@ -33,6 +33,7 @@ const errors = [];
 let browser, taskId, optionalTaskId;
 let careerTestId;
 let healthTestDate, healthTestId;
+const healthHistoryTestIds = [];
 const nextActionIds = [];
 const tasksOnly = process.env.PHOENIX_TASKS_ONLY === "1";
 try {
@@ -40,7 +41,50 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_HEALTH_ONLY === "1") {
+  if (process.env.PHOENIX_HEALTH_HISTORY_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const rows = await db.getHealth();
+    let end = dates.addDateDays(dates.localDateKey(new Date()), -1);
+    while (rows.some((row) => row.date >= dates.dateFromKey(dates.addDateDays(end, -6)) && row.date <= dates.dateFromKey(end))) end = dates.addDateDays(end, -1);
+    const days = [-2, -1, 0].map((offset) => dates.addDateDays(end, offset));
+    for (let i = 0; i < days.length; i++) {
+      const row = await prisma.healthMetric.create({ data: { userId: "demo-user", date: dates.dateFromKey(days[i]), sleep: [7, null, 6.5][i], water: 1.234 } });
+      healthHistoryTestIds.push(row.id);
+    }
+    await open(`/health?date=${end}`);
+    const history = (day) => page.getByRole("article", { name: `Health record ${day}`, exact: true });
+    for (const day of days) await history(day).waitFor();
+    assert.match(await history(days[1]).innerText(), /Sleep\s+—/);
+    const dots = page.locator(".recharts-line-dots circle");
+    await dots.first().waitFor(); assert.equal(await dots.count(), 2);
+    const paths = await page.locator(".recharts-line-curve").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d") ?? ""));
+    assert.ok(paths.every((d) => !/[LCQ]/i.test(d)), "Separated observations must not have connecting lines/curves");
+    await history(days[0]).getByRole("link").click();
+    const form = page.getByRole("form", { name: "Health entry" });
+    await page.getByRole("status").filter({ hasText: "At least two" }).waitFor();
+    assert.equal(await page.getByLabel("Health date", { exact: true }).inputValue(), days[0]);
+    assert.equal(await form.getByLabel("Sleep h").inputValue(), "7");
+    await form.getByLabel("Sleep h").fill("8");
+    const response = page.waitForResponse((r) => r.request().method() === "POST");
+    await form.getByRole("button", { name: "Save metrics" }).click(); await response;
+    await page.reload();
+    assert.match(await history(days[0]).innerText(), /Sleep\s+8h/);
+    assert.equal(await form.getByLabel("Sleep h").inputValue(), "8");
+    const updated = await prisma.healthMetric.findUnique({ where: { id: healthHistoryTestIds[0] } });
+    assert.equal(updated.sleep, 8); assert.equal(updated.water, 1.234);
+    assert.equal(await prisma.healthMetric.count({ where: { userId: "demo-user", date: updated.date } }), 1);
+    await history(end).getByRole("link").click();
+    await dots.first().waitFor(); assert.equal(await dots.count(), 2);
+    await dots.first().hover(); await page.getByText("8h", { exact: true }).last().waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await open(`/health?date=${dates.addDateDays(days[0], -1)}`);
+    await page.getByText("No sleep data recorded yet.", { exact: true }).waitFor();
+    await page.getByText("No health entry for this date yet.", { exact: true }).waitFor();
+    assert.deepEqual(errors, []);
+    console.log(`PASS history selection/correction/refresh, genuine dots with null gap, zero/one-value states, no duplicate and mobile: ${days.join(", ")}`);
+  } else if (process.env.PHOENIX_HEALTH_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const rows = await db.getHealth();
     let day = dates.addDateDays(dates.localDateKey(new Date()), -1);
@@ -510,6 +554,11 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  for (const id of healthHistoryTestIds) {
+    const removed = await prisma.healthMetric.deleteMany({ where: { id, userId: "demo-user", water: 1.234 } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED exact temporary Health history record ${id}`);
+  }
   if (healthTestDate) {
     // Date was confirmed absent before the test; recover its ID after a lost response.
     const row = await prisma.healthMetric.findUnique({ where: { userId_date: { userId: "demo-user", date: healthTestDate } } });

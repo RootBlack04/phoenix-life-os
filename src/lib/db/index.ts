@@ -776,6 +776,19 @@ export async function getHealth() {
   });
 }
 
+// Bounded history plus exact editor date and its seven-calendar-day chart window.
+export async function getHealthPageData(day: string) {
+  const [history, entry, trend] = await Promise.all([
+    prisma.healthMetric.findMany({ where: { userId: DEMO_USER_ID }, orderBy: { date: "desc" }, take: 30 }),
+    prisma.healthMetric.findUnique({ where: { userId_date: { userId: DEMO_USER_ID, date: dateFromKey(day) } } }),
+    prisma.healthMetric.findMany({
+      where: { userId: DEMO_USER_ID, date: { gte: dateFromKey(addDateDays(day, -6)), lte: dateFromKey(day) } },
+      orderBy: { date: "asc" },
+    }),
+  ]);
+  return { history, entry, trend };
+}
+
 export async function createHealthMetric(data: {
   date: Date;
   weight?: number | null;

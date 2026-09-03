@@ -1,6 +1,6 @@
 "use client";
 
-import { ResponsiveContainer, AreaChart, Area, XAxis, Tooltip } from "recharts";
+import { ResponsiveContainer, LineChart, Line, XAxis, Tooltip } from "recharts";
 
 type HealthChartProps = {
   data: {
@@ -10,11 +10,16 @@ type HealthChartProps = {
 };
 
 export function HealthChart({ data }: HealthChartProps) {
+  const observations = data.filter((point) => point.hours !== null);
+  if (observations.length < 2) return <p role="status" className="p-4 text-sm text-text-secondary">
+    {observations.length === 0 ? "No sleep data recorded yet." : `${observations[0].day}: ${observations[0].hours}h recorded. At least two sleep measurements are needed to show a trend.`}
+  </p>;
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data}>
+      <LineChart data={data}>
         <XAxis
           dataKey="day"
+          tickFormatter={(day: string) => day.slice(5)}
           stroke="var(--text-tertiary)"
           fontSize={11}
           tickLine={false}
@@ -22,6 +27,7 @@ export function HealthChart({ data }: HealthChartProps) {
         />
 
         <Tooltip
+          position={{ x: 12, y: 0 }}
           contentStyle={{
             background: "#0d1020",
             border: "1px solid rgba(148,163,255,0.2)",
@@ -31,15 +37,16 @@ export function HealthChart({ data }: HealthChartProps) {
           formatter={(value) => [`${value}h`, "Sleep"]}
         />
 
-        <Area
-          type="monotone"
+        <Line
+          type="linear"
+          connectNulls={false}
+          dot={{ r: 4, fill: "var(--accent-blue-soft)" }}
+          isAnimationActive={false}
           dataKey="hours"
           stroke="var(--accent-blue-soft)"
-          fill="var(--accent-blue-soft)"
-          fillOpacity={0.12}
           strokeWidth={2.5}
         />
-      </AreaChart>
+      </LineChart>
     </ResponsiveContainer>
   );
 }

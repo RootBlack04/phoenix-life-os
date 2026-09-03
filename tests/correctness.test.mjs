@@ -85,15 +85,66 @@ test("Health page defaults to local today and loads exact historical dates witho
   const { default: Page } = load("src/app/health/page.tsx", {
     "@/components/layout/app-shell": { AppShell: "shell" }, "@/components/ui/card": { Card: "card", CardHeader: "header" },
     "@/components/ui/progress-ring": { ProgressRing: "ring" }, "@/components/charts/health-chart": { HealthChart: "chart" },
-    "@/components/domain/health-client": { HealthEntryForm: "form" }, "@/lib/db": { getHealth: async () => [row] },
+    "next/link": "link",
+    "@/components/domain/health-client": { HealthEntryForm: "form" }, "@/lib/db": { getHealthPageData: async (day) => ({ history: [], entry: day === "2026-09-01" ? row : null, trend: [row] }) },
   });
   for (const date of [undefined, "2026-09-01", "2026-08-01", "9999-01-01", "invalid"]) {
     const tree = await Page({ searchParams: Promise.resolve({ date }) });
+    assert.match(JSON.stringify(tree), /No health history yet/);
     const form = elements(tree, (node) => node.type === "form")[0];
     assert.equal(form.props.date, date && date < "9999" && date !== "invalid" ? date : dates.localDateKey(new Date()));
     assert.equal(form.props.entry, date === "2026-09-01" ? row : null);
     assert.equal(elements(tree, (node) => node.type === "chart")[0].props.data[0].hours, null);
   }
+});
+test("Health page queries are bounded, date-ordered and user-scoped", async () => {
+  const queries = [];
+  const record = { id: "real" };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { healthMetric: {
+    findMany: async (query) => { queries.push(query); return [record]; },
+    findUnique: async (query) => { queries.push(query); return record; },
+  } } } });
+  const result = await db.getHealthPageData("2026-09-03");
+  assert.equal(result.entry, record); assert.equal(result.history[0], record);
+  assert.equal(queries[0].where.userId, "demo-user"); assert.equal(queries[0].take, 30); assert.equal(queries[0].orderBy.date, "desc");
+  assert.equal(queries[1].where.userId_date.userId, "demo-user"); assert.equal(queries[1].where.userId_date.date.toISOString(), "2026-09-03T00:00:00.000Z");
+  assert.equal(queries[2].where.userId, "demo-user"); assert.equal(queries[2].orderBy.date, "asc");
+  assert.equal(queries[2].where.date.gte.toISOString(), "2026-08-28T00:00:00.000Z");
+});
+
+test("Health history links reuse editor; sleep calendar preserves absent/null gaps and real zero", async () => {
+  const rows = [
+    { id: "a", date: dates.dateFromKey("2026-09-01"), sleep: 7 },
+    { id: "b", date: dates.dateFromKey("2026-09-02"), sleep: null },
+    { id: "c", date: dates.dateFromKey("2026-09-03"), sleep: 0 },
+  ];
+  const { default: Page } = load("src/app/health/page.tsx", {
+    "next/link": "link", "@/components/layout/app-shell": { AppShell: "shell" },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" }, "@/components/ui/progress-ring": { ProgressRing: "ring" },
+    "@/components/charts/health-chart": { HealthChart: "chart" }, "@/components/domain/health-client": { HealthEntryForm: "form" },
+    "@/lib/db": { getHealthPageData: async () => ({ history: [...rows].reverse(), entry: null, trend: rows }) },
+  });
+  const render = () => Page({ searchParams: Promise.resolve({ date: "2026-09-03" }) });
+  let tree = await render();
+  const data = elements(tree, (node) => node.type === "chart")[0].props.data;
+  assert.deepEqual(Array.from(data, (point) => point.hours), [null, null, null, null, 7, null, 0]);
+  assert.equal(data[5].day, "2026-09-02");
+  const links = elements(tree, (node) => node.type === "link");
+  assert.equal(links[0].props.href, "/health?date=2026-09-03#health-editor");
+  assert.equal(links[0].props["aria-current"], "date");
+  assert.match(JSON.stringify(tree), /—/);
+  rows[0].sleep = 8;
+  tree = await render(); assert.equal(elements(tree, (node) => node.type === "chart")[0].props.data[4].hours, 8);
+});
+
+test("Sleep chart has honest zero/one-observation states and unsmoothed gaps", () => {
+  const { HealthChart } = load("src/components/charts/health-chart.tsx", { recharts: { ResponsiveContainer: "container", LineChart: "chart", Line: "line", XAxis: "axis", Tooltip: "tooltip" } });
+  assert.match(JSON.stringify(HealthChart({ data: [{ day: "2026-09-01", hours: null }] })), /No sleep data recorded yet/);
+  const one = HealthChart({ data: [{ day: "2026-09-01", hours: 7 }] });
+  assert.match(JSON.stringify(one), /At least two/); assert.equal(elements(one, (node) => node.type === "line").length, 0);
+  const tree = HealthChart({ data: [{ day: "2026-09-01", hours: 7 }, { day: "2026-09-02", hours: null }, { day: "2026-09-03", hours: 6.5 }] });
+  const line = elements(tree, (node) => node.type === "line")[0];
+  assert.equal(line.props.connectNulls, false); assert.equal(line.props.type, "linear"); assert.equal(line.props.isAnimationActive, false); assert.equal(line.props.dot.r, 4);
 });
 test("Goal complete/reopen preserves 45, 80 and 100; editable non-DONE statuses stay intact", async () => {
   let row;

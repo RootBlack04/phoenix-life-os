@@ -10,9 +10,10 @@ import {
   HeartPulse,
 } from "lucide-react";
 import { HealthChart } from "@/components/charts/health-chart";
-import { getHealth } from "@/lib/db";
+import { getHealthPageData } from "@/lib/db";
+import Link from "next/link";
 import { HealthEntryForm } from "@/components/domain/health-client";
-import { localDateKey } from "@/lib/dates";
+import { addDateDays, dateFromKey, localDateKey } from "@/lib/dates";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -31,10 +32,9 @@ export default async function HealthPage({ searchParams }: { searchParams: Promi
   const requested = (await searchParams).date;
   const valid = requested === undefined || (z.iso.date().safeParse(requested).success && requested <= today);
   const selectedDate = valid && requested ? requested : today;
-  const rows = await getHealth();
-  const entry = rows.find((row) => row.date.toISOString().slice(0, 10) === selectedDate);
-
-  const latest = rows.at(-1);
+  const { history, entry, trend } = await getHealthPageData(selectedDate);
+  const latest = entry;
+  const formatDay = (day: string) => dateFromKey(day).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
 
   const metrics = [
     {
@@ -84,7 +84,7 @@ export default async function HealthPage({ searchParams }: { searchParams: Promi
       id: "workout",
       label: "Workouts",
       value: latest?.workouts != null ? String(latest.workouts) : "—",
-      goal: "5 / week",
+      goal: "5 / week (weekly target)",
       percent: latest?.workouts
         ? Math.min(100, Math.round((latest.workouts / 5) * 100))
         : 0,
@@ -105,18 +105,18 @@ export default async function HealthPage({ searchParams }: { searchParams: Promi
     },
   ];
 
-  const sleepTrend = rows.slice(-7).map((r) => ({
-    day: r.date.toLocaleDateString("en-US", {
-      weekday: "short",
-      timeZone: "UTC",
-    }),
-    hours: r.sleep,
-  }));
+  const sleepByDate = new Map(trend.map((row) => [row.date.toISOString().slice(0, 10), row.sleep]));
+  const sleepTrend = Array.from({ length: 7 }, (_, index) => {
+    const day = addDateDays(selectedDate, index - 6);
+    // Null placeholders preserve absent calendar days; they are not observations.
+    return { day, hours: sleepByDate.get(day) ?? null };
+  });
 
   return (
     <AppShell title="Health">
       <div className="space-y-6">
         {/* Metrics */}
+        <p className="text-sm text-text-secondary">Measurements for {formatDay(selectedDate)} · selected date</p>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
           {metrics.map((m) => {
             const Icon = icons[m.icon as keyof typeof icons];
@@ -128,13 +128,13 @@ export default async function HealthPage({ searchParams }: { searchParams: Promi
                     <Icon size={18} className="text-text-secondary" />
                   </div>
 
-                  <ProgressRing
+                  {m.value !== "—" && <ProgressRing
                     percent={m.percent}
                     size={48}
                     strokeWidth={5}
                     color="var(--accent-blue)"
                     colorTo="var(--accent-purple)"
-                  />
+                  />}
                 </div>
 
                 <p className="font-display text-xl font-bold text-text-primary">
@@ -154,18 +154,42 @@ export default async function HealthPage({ searchParams }: { searchParams: Promi
         {/* Sleep trend + entry form */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <Card className="xl:col-span-2">
-            <CardHeader title="Sleep Trend" eyebrow="Last 7 days" />
+            <CardHeader title="Sleep Trend" eyebrow={`7 calendar days ending ${formatDay(selectedDate)}`} />
 
             <div className="h-[240px] -ml-4">
               <HealthChart data={sleepTrend} />
             </div>
           </Card>
 
-          <Card>
+          <Card id="health-editor">
             {!valid && <p role="alert" className="mb-3 text-sm text-danger">Choose a valid date no later than today. Showing today instead.</p>}
             <HealthEntryForm key={`${selectedDate}:${entry?.updatedAt.toISOString() ?? "new"}`} date={selectedDate} today={today} entry={entry ?? null} />
           </Card>
         </div>
+        <Card>
+          <CardHeader title="Health History" eyebrow="Latest 30 entries · newest first" />
+          {history.length === 0 ? <p className="text-sm text-text-secondary">No health history yet.</p> :
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {history.map((row) => {
+                const day = row.date.toISOString().slice(0, 10);
+                const values = [
+                  ["Weight", row.weight == null ? "—" : `${row.weight} kg`],
+                  ["Sleep", row.sleep == null ? "—" : `${row.sleep}h`],
+                  ["Water", row.water == null ? "—" : `${row.water}L`],
+                  ["Steps", row.steps?.toLocaleString() ?? "—"],
+                  ["Workouts", row.workouts ?? "—"],
+                  ["Resting HR", row.heartRate == null ? "—" : `${row.heartRate} bpm`],
+                ];
+                return <article key={row.id} aria-label={`Health record ${day}`} className="min-w-0 rounded-xl border border-white/10 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <h3 className="text-sm font-medium"><time dateTime={day}>{formatDay(day)}</time></h3>
+                    <Link href={`/health?date=${day}#health-editor`} aria-current={day === selectedDate ? "date" : undefined} className="text-xs text-accent-blue-soft hover:underline">{day === selectedDate ? "Selected · Edit" : "View / Edit"}</Link>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-3 text-xs">{values.map(([name, value]) => <div key={name}><dt className="text-text-secondary">{name}</dt><dd className="mt-1 break-words">{value}</dd></div>)}</dl>
+                </article>;
+              })}
+            </div>}
+        </Card>
       </div>
     </AppShell>
   );
