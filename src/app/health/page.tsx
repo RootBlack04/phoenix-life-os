@@ -12,6 +12,8 @@ import {
 import { HealthChart } from "@/components/charts/health-chart";
 import { getHealth } from "@/lib/db";
 import { HealthEntryForm } from "@/components/domain/health-client";
+import { localDateKey } from "@/lib/dates";
+import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +26,13 @@ const icons = {
   HeartPulse,
 };
 
-export default async function HealthPage() {
+export default async function HealthPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
+  const today = localDateKey(new Date());
+  const requested = (await searchParams).date;
+  const valid = requested === undefined || (z.iso.date().safeParse(requested).success && requested <= today);
+  const selectedDate = valid && requested ? requested : today;
   const rows = await getHealth();
+  const entry = rows.find((row) => row.date.toISOString().slice(0, 10) === selectedDate);
 
   const latest = rows.at(-1);
 
@@ -46,7 +53,7 @@ export default async function HealthPage() {
     {
       id: "sleep",
       label: "Sleep",
-      value: latest?.sleep ? `${latest.sleep}h` : "—",
+      value: latest?.sleep != null ? `${latest.sleep}h` : "—",
       goal: "8h",
       percent: latest?.sleep
         ? Math.min(100, Math.round((latest.sleep / 8) * 100))
@@ -56,7 +63,7 @@ export default async function HealthPage() {
     {
       id: "water",
       label: "Water",
-      value: latest?.water ? `${latest.water}L` : "—",
+      value: latest?.water != null ? `${latest.water}L` : "—",
       goal: "3L",
       percent: latest?.water
         ? Math.min(100, Math.round((latest.water / 3) * 100))
@@ -76,7 +83,7 @@ export default async function HealthPage() {
     {
       id: "workout",
       label: "Workouts",
-      value: String(latest?.workouts ?? 0),
+      value: latest?.workouts != null ? String(latest.workouts) : "—",
       goal: "5 / week",
       percent: latest?.workouts
         ? Math.min(100, Math.round((latest.workouts / 5) * 100))
@@ -103,7 +110,7 @@ export default async function HealthPage() {
       weekday: "short",
       timeZone: "UTC",
     }),
-    hours: r.sleep ?? 0,
+    hours: r.sleep,
   }));
 
   return (
@@ -155,9 +162,8 @@ export default async function HealthPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Log Health" eyebrow="Today's metrics" />
-
-            <HealthEntryForm />
+            {!valid && <p role="alert" className="mb-3 text-sm text-danger">Choose a valid date no later than today. Showing today instead.</p>}
+            <HealthEntryForm key={`${selectedDate}:${entry?.updatedAt.toISOString() ?? "new"}`} date={selectedDate} today={today} entry={entry ?? null} />
           </Card>
         </div>
       </div>

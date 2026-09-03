@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { JobStage, LifeAreaKey } from "@/generated/prisma/enums";
-import { localMidnight } from "@/lib/dates";
+import { dateFromKey, localDateKey, localMidnight } from "@/lib/dates";
 
 import {
   createHealthMetric,
@@ -124,14 +124,14 @@ const incomeSchema = z.object({
 });
 
 const healthSchema = z.object({
-  date: z.coerce.date(),
-  weight: z.number().positive().optional(),
-  sleep: z.number().nonnegative().optional(),
-  water: z.number().nonnegative().optional(),
-  steps: z.number().int().nonnegative().optional(),
-  workouts: z.number().int().nonnegative().optional(),
-  heartRate: z.number().int().positive().optional(),
-});
+  date: z.iso.date().refine((day) => day <= localDateKey(new Date()), "Future health dates are not allowed").transform(dateFromKey),
+  weight: z.number().positive().nullable().optional(),
+  sleep: z.number().nonnegative().nullable().optional(),
+  water: z.number().nonnegative().nullable().optional(),
+  steps: z.number().int().nonnegative().nullable().optional(),
+  workouts: z.number().int().nonnegative().nullable().optional(),
+  heartRate: z.number().int().positive().nullable().optional(),
+}).refine((data) => [data.weight, data.sleep, data.water, data.steps, data.workouts, data.heartRate].some((value) => value !== undefined), "Change at least one measurement");
 
 const resourceSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200),

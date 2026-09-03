@@ -32,6 +32,7 @@ const noteText = `${marker} note`;
 const errors = [];
 let browser, taskId, optionalTaskId;
 let careerTestId;
+let healthTestDate, healthTestId;
 const nextActionIds = [];
 const tasksOnly = process.env.PHOENIX_TASKS_ONLY === "1";
 try {
@@ -39,7 +40,71 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_GOALS_ONLY === "1") {
+  if (process.env.PHOENIX_HEALTH_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const rows = await db.getHealth();
+    let day = dates.addDateDays(dates.localDateKey(new Date()), -1);
+    while (rows.some((row) => row.date.toISOString().slice(0, 10) === day)) day = dates.addDateDays(day, -1);
+    healthTestDate = dates.dateFromKey(day);
+    await open("/health");
+    assert.equal(await page.getByLabel("Health date", { exact: true }).inputValue(), dates.localDateKey(new Date()));
+    await page.getByLabel("Health date", { exact: true }).fill(day);
+    await page.getByText("No health entry for this date yet.", { exact: true }).waitFor();
+    const form = page.getByRole("form", { name: "Health entry" });
+    assert.equal(await form.getByLabel("Weight kg").inputValue(), "");
+    await form.getByLabel("Weight kg").fill("82");
+    await form.getByLabel("Sleep h").fill("6.5");
+    await form.getByRole("button", { name: "Save metrics" }).click();
+    await page.getByText("Edit saved measurements.", { exact: false }).waitFor();
+    const read = () => prisma.healthMetric.findUnique({ where: { userId_date: { userId: "demo-user", date: healthTestDate } } });
+    healthTestId = (await read()).id;
+    await page.reload();
+    assert.equal(await form.getByLabel("Sleep h").inputValue(), "6.5");
+    await form.getByLabel("Weight kg").fill("81.5");
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Save metrics" }).click();
+    await page.getByRole("alert").filter({ hasText: "Could not save" }).waitFor();
+    assert.equal(await form.getByLabel("Weight kg").inputValue(), "81.5");
+    assert.equal((await read()).weight, 82);
+    await page.unroute("**/*");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save metrics" }).click();
+    await saved;
+    await page.reload();
+    assert.equal(await form.getByLabel("Weight kg").inputValue(), "81.5");
+    assert.equal(await form.getByLabel("Sleep h").inputValue(), "6.5");
+    assert.equal(await page.getByLabel("Health date", { exact: true }).inputValue(), day);
+    const corrected = await read();
+    assert.equal(corrected.id, healthTestId); assert.equal(corrected.sleep, 6.5);
+    await form.getByLabel("Weight kg").fill("");
+    const cleared = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save metrics" }).click(); await cleared;
+    await page.reload();
+    assert.equal(await form.getByLabel("Weight kg").inputValue(), "");
+    assert.equal((await read()).weight, null); assert.equal((await read()).sleep, 6.5);
+    assert.equal(await prisma.healthMetric.count({ where: { userId: "demo-user", date: healthTestDate } }), 1);
+    await form.getByLabel("Sleep h").fill("7.5");
+    const sleepSaved = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save metrics" }).click(); await sleepSaved;
+    await page.reload();
+    assert.equal(await form.getByLabel("Sleep h").inputValue(), "7.5");
+    const weekly = await load("src/lib/analytics/weekly.ts").getWeeklyMetrics(healthTestDate);
+    const allHealth = await db.getHealth();
+    const weekSleep = allHealth.filter((row) => {
+      const key = row.date.toISOString().slice(0, 10);
+      return key >= weekly.week.start && key <= weekly.week.end && row.sleep !== null;
+    }).map((row) => row.sleep);
+    assert.equal(weekly.current.health.averageSleep, Math.round(weekSleep.reduce((a, b) => a + b, 0) / weekSleep.length * 10) / 10);
+    const latest = allHealth.at(-1);
+    const parts = [[latest.sleep, 8], [latest.water, 3], [latest.steps, 10000]].filter(([value]) => value !== null).map(([value, target]) => Math.min(value, target) / target);
+    const overview = await db.getOverviewData();
+    assert.equal(overview.lifeAreas.find((area) => area.key === "health").percent, parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length * 100) : null);
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await open("/");
+    assert.deepEqual(errors, []);
+    console.log(`PASS Health create/correct/clear/refresh, same ID/date, preserved sleep, failure input retention, mobile and Overview; temporary date ${day}`);
+  } else if (process.env.PHOENIX_GOALS_ONLY === "1") {
     let acceptCompletion = false;
     page.on("dialog", async (dialog) => acceptCompletion ? dialog.accept() : dialog.dismiss());
     const baseline = await db.getOverviewData();
@@ -445,6 +510,15 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (healthTestDate) {
+    // Date was confirmed absent before the test; recover its ID after a lost response.
+    const row = await prisma.healthMetric.findUnique({ where: { userId_date: { userId: "demo-user", date: healthTestDate } } });
+    if (row) {
+      assert.ok(!healthTestId || row.id === healthTestId);
+      await prisma.healthMetric.deleteMany({ where: { id: row.id, userId: "demo-user", date: healthTestDate } });
+      console.log(`REMOVED exact temporary HealthMetric ${row.id}`);
+    }
+  }
   if (process.env.PHOENIX_GOALS_ONLY === "1") {
     const temporaryGoals = await prisma.goal.findMany({ where: { userId: "demo-user", title: { in: [marker, `${marker} edited`] } }, select: { id: true, title: true } });
     for (const goal of temporaryGoals) {

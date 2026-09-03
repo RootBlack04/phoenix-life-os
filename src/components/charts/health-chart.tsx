@@ -5,7 +5,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, Tooltip } from "recharts";
 type HealthChartProps = {
   data: {
     day: string;
-    hours: number;
+    hours: number | null;
   }[];
 };
 

@@ -778,12 +778,12 @@ export async function getHealth() {
 
 export async function createHealthMetric(data: {
   date: Date;
-  weight?: number;
-  sleep?: number;
-  water?: number;
-  steps?: number;
-  workouts?: number;
-  heartRate?: number;
+  weight?: number | null;
+  sleep?: number | null;
+  water?: number | null;
+  steps?: number | null;
+  workouts?: number | null;
+  heartRate?: number | null;
 }) {
   return prisma.healthMetric.upsert({
     where: {

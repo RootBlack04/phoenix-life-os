@@ -20,11 +20,81 @@ function load(file, mocks = {}) {
     if (id.startsWith("@/")) return load(`src/${id.slice(2)}.ts`, mocks);
     return require(id);
   };
-  vm.runInNewContext(code, { module: moduleBox, exports: moduleBox.exports, require: localRequire, Date, Intl, console, setTimeout, clearTimeout, window: mocks.window }, { filename });
+  vm.runInNewContext(code, { module: moduleBox, exports: moduleBox.exports, require: localRequire, Date, Intl, console, setTimeout, clearTimeout, window: mocks.window, FormData: mocks.FormData }, { filename });
   return moduleBox.exports;
 }
 
 const dates = load("src/lib/dates.ts");
+test("Health form sends only changed values, guards duplicates, retains failure and refreshes on success", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [], routes = [];
+  const entry = { weight: 82, sleep: 6.5, water: null, steps: null, workouts: null, heartRate: null };
+  const { HealthEntryForm } = load("src/components/domain/health-client.tsx", {
+    FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key] ?? ""; } },
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "@/components/ui/card": { CardHeader: "header" },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++, replace: (route) => routes.push(route) }) },
+    "@/lib/db/actions": { saveHealth: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  let tree;
+  const render = () => { cursor = 0; tree = HealthEntryForm({ date: "2026-09-01", today: "2026-09-03", entry }); };
+  const submit = (values) => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {}, currentTarget: values });
+  render();
+  submit({ weight: "82", sleep: "6.5" }); assert.equal(calls.length, 0);
+  submit({ weight: "81.5", sleep: "6.5" }); submit({ weight: "81.5", sleep: "6.5" });
+  assert.equal(calls.length, 1); assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), { date: "2026-09-01", weight: 81.5 });
+  rejectSave(new Error("offline")); await Promise.all(transitions); render();
+  assert.match(JSON.stringify(tree), /Your input has been kept/); assert.equal(refreshes, 0);
+  submit({ weight: "", sleep: "6.5" }); assert.equal(calls[1].weight, null); assert.equal(calls[1].sleep, undefined);
+  resolveSave(); await Promise.all(transitions); assert.equal(refreshes, 1);
+  elements(tree, (node) => node.props.type === "date")[0].props.onChange({ target: { value: "2026-08-01" } });
+  assert.deepEqual(routes, ["/health?date=2026-08-01"]);
+});
+test("Health calendar upsert preserves omitted fields, clears null and validates without coercion", async () => {
+  const rows = [], paths = [];
+  const prisma = { healthMetric: {
+    findMany: async ({ where }) => rows.filter((row) => row.userId === where.userId),
+    upsert: async ({ where, update, create }) => {
+      assert.equal(where.userId_date.userId, "demo-user");
+      const found = rows.find((row) => row.date.getTime() === where.userId_date.date.getTime() && row.userId === where.userId_date.userId);
+      if (found) Object.assign(found, Object.fromEntries(Object.entries(update).filter(([, value]) => value !== undefined)));
+      else rows.push({ ...create });
+    },
+  } };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma } });
+  const { saveHealth } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const date = "2026-09-01";
+  await saveHealth({ date, weight: 82, sleep: 6.5 });
+  await saveHealth({ date, weight: 81.5 });
+  assert.equal(rows.length, 1); assert.equal(rows[0].sleep, 6.5); assert.equal(rows[0].weight, 81.5);
+  assert.equal(rows[0].date.toISOString(), "2026-09-01T00:00:00.000Z");
+  await saveHealth({ date, weight: null });
+  assert.equal(rows[0].weight, null); assert.equal(rows[0].sleep, 6.5);
+  await saveHealth({ date, steps: 0 }); assert.equal(rows[0].steps, 0);
+  for (const input of [{ date }, { date: "2026-02-30", sleep: 7 }, { date: "9999-01-01", sleep: 7 }, { date, weight: "" }, { date, weight: 0 }, { date, sleep: -1 }, { date, steps: 1.2 }, { date, water: Infinity }]) await assert.rejects(() => saveHealth(input));
+  assert.equal(rows.length, 1); assert.equal((await db.getHealth()).length, 1);
+  assert.deepEqual(paths, Array(4).fill(["/health", "/"]).flat());
+});
+
+test("Health page defaults to local today and loads exact historical dates without missing-value zeros", async () => {
+  const row = { date: dates.dateFromKey("2026-09-01"), updatedAt: new Date(), weight: 82, sleep: null };
+  const { default: Page } = load("src/app/health/page.tsx", {
+    "@/components/layout/app-shell": { AppShell: "shell" }, "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/components/ui/progress-ring": { ProgressRing: "ring" }, "@/components/charts/health-chart": { HealthChart: "chart" },
+    "@/components/domain/health-client": { HealthEntryForm: "form" }, "@/lib/db": { getHealth: async () => [row] },
+  });
+  for (const date of [undefined, "2026-09-01", "2026-08-01", "9999-01-01", "invalid"]) {
+    const tree = await Page({ searchParams: Promise.resolve({ date }) });
+    const form = elements(tree, (node) => node.type === "form")[0];
+    assert.equal(form.props.date, date && date < "9999" && date !== "invalid" ? date : dates.localDateKey(new Date()));
+    assert.equal(form.props.entry, date === "2026-09-01" ? row : null);
+    assert.equal(elements(tree, (node) => node.type === "chart")[0].props.data[0].hours, null);
+  }
+});
 test("Goal complete/reopen preserves 45, 80 and 100; editable non-DONE statuses stay intact", async () => {
   let row;
   const prisma = { goal: {
