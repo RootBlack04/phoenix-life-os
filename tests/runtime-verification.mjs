@@ -36,6 +36,7 @@ let incomeTestId;
 let journalTestId;
 let resourceTestId;
 let noteSafetyTestId;
+const engineeringTestIds = [];
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -45,7 +46,46 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_NOTES_ONLY === "1") {
+  if (process.env.PHOENIX_ENGINEERING_ONLY === "1") {
+    for (const suffix of ["", " second"]) {
+      const row = await prisma.project.create({ data: { userId: "demo-user", name: marker + suffix, progress: 40, status: "IN_PROGRESS", technologies: ["Test"] } });
+      engineeringTestIds.push(row.id);
+    }
+    const original = await prisma.project.findUnique({ where: { id: engineeringTestIds[0] } });
+    const plus = page.getByRole("button", { name: `Increase ${marker} progress`, exact: true });
+    const row = page.locator('[aria-busy]').filter({ has: plus });
+    await open("/engineering");
+    let release, requests = 0;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/*", async (route) => {
+      if (route.request().method() === "POST") { requests++; await held; }
+      await route.continue();
+    });
+    await plus.click(); await plus.dispatchEvent("click");
+    assert.ok((await row.innerText()).includes("40%"));
+    assert.equal(await page.getByRole("button", { name: `Increase ${marker} second progress`, exact: true }).isEnabled(), true);
+    const saved = page.waitForResponse((r) => r.request().method() === "POST"); release(); await saved;
+    await page.unroute("**/*"); await page.reload();
+    assert.equal(requests, 1); assert.ok((await row.innerText()).includes("50%"));
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await plus.click(); await page.getByRole("alert").filter({ hasText: "Could not save progress" }).waitFor();
+    assert.ok((await row.innerText()).includes("50%")); await page.unroute("**/*");
+    await page.reload();
+    await db.updateProjectProgress(original.id, 60, 50);
+    await plus.click(); await page.getByRole("alert").filter({ hasText: "Could not save progress" }).waitFor();
+    await page.waitForFunction((name) => Array.from(document.querySelectorAll('[aria-busy]')).some((el) => el.textContent.includes(name) && el.textContent.includes("60%")), marker);
+    assert.equal((await prisma.project.findUnique({ where: { id: original.id } })).progress, 60);
+    await page.reload();
+    const retry = page.waitForResponse((r) => r.request().method() === "POST"); await plus.click(); await retry; await page.reload();
+    const updated = await prisma.project.findUnique({ where: { id: original.id } });
+    assert.equal(updated.progress, 70); assert.equal(updated.status, original.status);
+    for (const key of ["id", "userId", "name", "description", "repositoryUrl", "liveUrl"]) assert.equal(updated[key], original[key]);
+    assert.deepEqual(updated.technologies, original.technologies); assert.equal(updated.createdAt.getTime(), original.createdAt.getTime());
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    await plus.waitFor({ state: "visible" }); assert.deepEqual(errors, []);
+    console.log("PASS Engineering persisted refresh, failure/retry, stale rejection, duplicate guard, per-project pending, unchanged metadata/status and mobile");
+  } else if (process.env.PHOENIX_NOTES_ONLY === "1") {
     const original = await prisma.note.create({ data: { userId: "demo-user", title: marker, content: `${marker} original`, tag: "General", pinned: false } });
     noteSafetyTestId = original.id;
     let confirmDelete = false;
@@ -756,6 +796,11 @@ try {
   console.log("PASS no uncaught browser errors");
   }
 } finally {
+  for (const id of engineeringTestIds) {
+    const removed = await prisma.project.deleteMany({ where: { id, userId: "demo-user", name: { in: [marker, `${marker} second`] } } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED exact temporary Engineering project ${id}`);
+  }
   if (browser) await browser.close();
   if (noteSafetyTestId) {
     const removed = await prisma.note.deleteMany({ where: { id: noteSafetyTestId, userId: "demo-user", title: marker } });

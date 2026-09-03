@@ -102,8 +102,9 @@ const createJobApplicationSchema = z.object({
 });
 
 const projectSchema = z.object({
-  id: z.string(),
+  id: z.string().trim().min(1),
   progress: z.number().int().min(0).max(100),
+  expectedProgress: z.number().int().min(0).max(100),
 });
 
 const createTaskSchema = z.object({
@@ -379,7 +380,7 @@ export async function setTaskStatus(
 export async function setProjectProgress(input: z.input<typeof projectSchema>) {
   const data = projectSchema.parse(input);
 
-  await updateProjectProgress(data.id, data.progress);
+  await updateProjectProgress(data.id, data.progress, data.expectedProgress);
 
   revalidatePath("/engineering");
   revalidatePath("/");

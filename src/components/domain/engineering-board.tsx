@@ -1,5 +1,6 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Minus, Plus } from "lucide-react";
 import { setProjectProgress } from "@/lib/db/actions";
 import { Badge } from "@/components/ui/badge";
@@ -30,27 +31,37 @@ export function EngineeringBoard({
 }: {
   projects: EngineeringBoardProject[];
 }) {
-  // Optimistic local copy so the bar/number move instantly; the Server
-  // Action is still the source of truth and revalidates on completion.
-  const [items, setItems] = useState(projects);
+  return <div className="space-y-4">{projects.map((project) => <ProjectRow key={project.id} project={project} />)}</div>;
+}
+
+function ProjectRow({ project: p }: { project: EngineeringBoardProject }) {
+  const router = useRouter();
+  const saving = useRef(false);
+  const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  function adjust(id: string, delta: number) {
-    const current = items.find((p) => p.id === id);
-    if (!current) return;
-    const next = Math.max(0, Math.min(100, current.progress + delta));
-    if (next === current.progress) return;
-
-    setItems((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, progress: next } : p)),
-    );
-    start(() => setProjectProgress({ id, progress: next }));
+  function adjust(delta: number) {
+    if (saving.current || pending) return;
+    const next = Math.max(0, Math.min(100, p.progress + delta));
+    if (next === p.progress) return;
+    saving.current = true;
+    setError(null);
+    start(async () => {
+      try {
+        await setProjectProgress({ id: p.id, progress: next, expectedProgress: p.progress });
+        router.refresh();
+      } catch {
+        setError("Could not save progress. Refreshing saved values; please try again.");
+        router.refresh();
+      } finally {
+        saving.current = false;
+      }
+    });
   }
 
   return (
-    <div className="space-y-4">
-      {items.map((p) => (
-        <div key={p.id} className="flex items-center gap-4">
+    <div>
+        <div className="flex items-center gap-4" aria-busy={pending}>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1.5 gap-2">
               <p className="text-sm font-medium text-text-primary truncate">
@@ -81,7 +92,7 @@ export function EngineeringBoard({
             <button
               type="button"
               disabled={pending || p.progress <= 0}
-              onClick={() => adjust(p.id, -STEP)}
+              onClick={() => adjust(-STEP)}
               aria-label={`Decrease ${p.name} progress`}
               className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
@@ -93,7 +104,7 @@ export function EngineeringBoard({
             <button
               type="button"
               disabled={pending || p.progress >= 100}
-              onClick={() => adjust(p.id, STEP)}
+              onClick={() => adjust(STEP)}
               aria-label={`Increase ${p.name} progress`}
               className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
@@ -101,7 +112,7 @@ export function EngineeringBoard({
             </button>
           </div>
         </div>
-      ))}
+      {error && <p role="alert" className="mt-2 text-xs text-red-400">{error}</p>}
     </div>
   );
 }

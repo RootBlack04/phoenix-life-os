@@ -1346,14 +1346,15 @@ export async function updateJobStage(
   });
 }
 
-export async function updateProjectProgress(id: string, progress: number) {
-  return prisma.project.update({
-    where: {
-      id,
-    },
-
-    data: {
-      progress: Math.max(0, Math.min(100, progress)),
-    },
+export async function updateProjectProgress(id: string, progress: number, expectedProgress: number) {
+  if (!id.trim() || ![progress, expectedProgress].every((value) => Number.isInteger(value) && value >= 0 && value <= 100)) {
+    throw new Error("Invalid project progress");
+  }
+  const result = await prisma.project.updateMany({
+    where: { id, userId: DEMO_USER_ID, progress: expectedProgress },
+    data: { progress },
   });
+  if (result.count !== 1) {
+    throw new Error("Project unavailable or changed. Refresh and try again.");
+  }
 }

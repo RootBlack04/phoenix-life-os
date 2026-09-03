@@ -25,6 +25,57 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Engineering writes enforce ownership, expected progress, validation and independent status", async () => {
+  const rows = [{ id: "owned", userId: "demo-user", progress: 40, status: "IN_PROGRESS", name: "Keep" }, { id: "foreign", userId: "other", progress: 40, status: "DONE" }];
+  const paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { project: { updateMany: async ({ where, data }) => {
+    assert.equal(where.userId, "demo-user");
+    assert.deepEqual(Object.keys(data), ["progress"]);
+    const row = rows.find((r) => r.id === where.id && r.userId === where.userId && r.progress === where.progress);
+    if (!row) return { count: 0 };
+    Object.assign(row, data); return { count: 1 };
+  } } } } });
+  const { setProjectProgress } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (p) => paths.push(p) } });
+  for (const value of [-1, 101, 1.5, NaN, Infinity, "50", null, undefined]) {
+    await assert.rejects(() => setProjectProgress({ id: "owned", progress: value, expectedProgress: 40 }));
+    await assert.rejects(() => setProjectProgress({ id: "owned", progress: 50, expectedProgress: value }));
+  }
+  for (const id of ["foreign", "missing", " "]) await assert.rejects(() => setProjectProgress({ id, progress: 50, expectedProgress: 40 }));
+  await setProjectProgress({ id: "owned", progress: 60, expectedProgress: 40 });
+  await assert.rejects(() => setProjectProgress({ id: "owned", progress: 50, expectedProgress: 40 }));
+  assert.equal(rows[0].progress, 60);
+  await setProjectProgress({ id: "owned", progress: 100, expectedProgress: 60 });
+  assert.deepEqual(rows[0], { id: "owned", userId: "demo-user", progress: 100, status: "IN_PROGRESS", name: "Keep" });
+  assert.equal(rows[1].progress, 40);
+  assert.deepEqual(paths, ["/engineering", "/", "/engineering", "/"]);
+});
+
+test("Engineering displays server props, guards duplicate saves and recovers failures", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [];
+  const { EngineeringBoard } = load("src/components/domain/engineering-board.tsx", {
+    react: {
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { setProjectProgress: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+    "@/components/ui/badge": { Badge: "badge" },
+    "@/components/ui/progress-bar": { ProgressBar: "bar" },
+  });
+  const project = { id: "p", name: "Project", stack: [], progress: 40, status: "in-progress" };
+  const render = (p = project) => { cursor = 0; const row = EngineeringBoard({ projects: [p] }).props.children[0]; return row.type(row.props); };
+  const plus = (tree) => elements(tree, (n) => n.props?.["aria-label"] === "Increase Project progress")[0];
+  const percent = (tree) => elements(tree, (n) => n.type === "bar")[0].props.percent;
+  plus(render()).props.onClick(); plus(render()).props.onClick();
+  assert.equal(calls.length, 1); assert.equal(percent(render()), 40); assert.equal(calls[0].expectedProgress, 40);
+  rejectSave(new Error("Failed")); await transitions.pop();
+  assert.equal(percent(render()), 40); assert.equal(elements(render(), (n) => n.props?.role === "alert").length, 1);
+  plus(render()).props.onClick(); resolveSave(); await transitions.pop();
+  assert.equal(refreshes, 2); assert.equal(percent(render({ ...project, progress: 50 })), 50);
+  assert.equal(elements(render(), (n) => n.props?.role === "alert").length, 0);
+});
 test("Note update/delete require owner plus ID and preserve identity", async () => {
   let row = { id: "n", userId: "demo-user", title: "Before", content: "Before", tag: "General", pinned: false };
   const paths = [];
