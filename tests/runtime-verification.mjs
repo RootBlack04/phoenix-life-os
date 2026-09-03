@@ -32,6 +32,7 @@ const noteText = `${marker} note`;
 const errors = [];
 let browser, taskId, optionalTaskId;
 let careerTestId;
+let incomeTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -41,7 +42,55 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_HEALTH_HISTORY_ONLY === "1") {
+  if (process.env.PHOENIX_INCOME_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const baseline = (await db.getIncome()).reduce((sum, row) => sum + row.amount, 0);
+    const original = await prisma.income.create({ data: { userId: "demo-user", source: marker, amount: 153.25, goal: 500, type: "FREELANCE", month: dates.dateFromKey("2026-09-03"), notes: marker, status: "active" } });
+    incomeTestId = original.id;
+    await open("/income");
+    let article = page.getByRole("article", { name: `Income record ${marker}`, exact: true });
+    await article.getByRole("button", { name: "Edit", exact: true }).click();
+    let form = article.getByRole("form", { name: "Edit income" });
+    assert.equal(await form.getByLabel("Amount", { exact: true }).inputValue(), "153.25");
+    assert.equal(await form.getByLabel("Month", { exact: true }).inputValue(), "2026-09");
+    await form.getByLabel("Source", { exact: true }).fill(`${marker} edited`);
+    await form.getByLabel("Amount", { exact: true }).fill("201.375");
+    await form.getByLabel("Type", { exact: true }).selectOption("REMOTE_JOB");
+    await form.getByLabel("Month", { exact: true }).fill("2026-08");
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await article.getByRole("alert").waitFor();
+    assert.equal(await form.getByLabel("Amount", { exact: true }).inputValue(), "201.375");
+    assert.equal((await prisma.income.findUnique({ where: { id: incomeTestId } })).amount, 153.25);
+    await page.unroute("**/*");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save changes" }).click(); await saved;
+    await page.reload();
+    article = page.getByRole("article", { name: `Income record ${marker} edited`, exact: true });
+    await article.waitFor();
+    const updated = await prisma.income.findUnique({ where: { id: incomeTestId } });
+    assert.equal(updated.amount, 201.375); assert.equal(updated.source, `${marker} edited`); assert.equal(updated.type, "REMOTE_JOB");
+    assert.equal(updated.month.toISOString(), "2026-08-01T00:00:00.000Z");
+    for (const key of ["id", "userId", "goal", "notes", "status"]) assert.equal(updated[key], original[key]);
+    assert.equal(updated.createdAt.getTime(), original.createdAt.getTime());
+    const current = await db.getIncome();
+    assert.equal(current.filter((row) => row.id === incomeTestId).length, 1);
+    assert.ok(Math.abs(current.reduce((sum, row) => sum + row.amount, 0) - baseline - 201.375) < 0.000001);
+    const total = page.getByText("Total", { exact: true }).locator("..");
+    assert.ok((await total.innerText()).includes((baseline + 201.375).toLocaleString()));
+    await article.getByRole("button", { name: "Edit", exact: true }).click();
+    form = article.getByRole("form", { name: "Edit income" });
+    assert.equal(await form.getByLabel("Month", { exact: true }).inputValue(), "2026-08");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    await form.getByLabel("Goal (optional)", { exact: true }).fill("");
+    const cleared = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save changes" }).click(); await cleared;
+    await page.reload();
+    assert.equal((await prisma.income.findUnique({ where: { id: incomeTestId } })).goal, null);
+    await open("/"); assert.deepEqual(errors, []);
+    console.log("PASS Income edit fields, same ID, metadata preserved, exact totals, failed draft, hard refresh, nullable goal and mobile");
+  } else if (process.env.PHOENIX_HEALTH_HISTORY_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const rows = await db.getHealth();
     let end = dates.addDateDays(dates.localDateKey(new Date()), -1);
@@ -554,6 +603,11 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (incomeTestId) {
+    const removed = await prisma.income.deleteMany({ where: { id: incomeTestId, userId: "demo-user", notes: marker } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED exact temporary Income record ${incomeTestId}`);
+  }
   for (const id of healthHistoryTestIds) {
     const removed = await prisma.healthMetric.deleteMany({ where: { id, userId: "demo-user", water: 1.234 } });
     assert.equal(removed.count, 1);

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import type { JobStage, LifeAreaKey } from "@/generated/prisma/enums";
+import type { IncomeType, JobStage, LifeAreaKey } from "@/generated/prisma/enums";
 import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
 
 import type {
@@ -758,6 +758,16 @@ export async function createIncome(data: {
       userId: DEMO_USER_ID,
     },
   });
+}
+
+export async function updateIncome(id: string, data: {
+  source: string;
+  amount: number;
+  goal?: number | null;
+  type: IncomeType;
+  month?: Date;
+}) {
+  return prisma.income.update({ where: { id, userId: DEMO_USER_ID }, data });
 }
 
 /* =========================================================

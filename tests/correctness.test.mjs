@@ -25,6 +25,55 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Income edit validates values and preserves owner, ID and unrelated data", async () => {
+  const row = { id: "income", userId: "demo-user", source: "Before", amount: 12, goal: 100, type: "FREELANCE", month: dates.dateFromKey("2026-09-03"), status: "active", notes: "Keep", createdAt: new Date() };
+  const original = { ...row }, paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { income: {
+    update: async ({ where, data }) => {
+      assert.equal(where.userId, "demo-user");
+      if (where.id !== row.id) throw new Error("Not owned");
+      Object.assign(row, Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined)));
+      return row;
+    },
+  } } } });
+  const { editIncome } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const payload = { id: row.id, source: " Corrected ", amount: 23.456, type: "OTHER" };
+  for (const bad of [{ amount: -1 }, { amount: NaN }, { amount: Infinity }, { amount: "" }, { source: " " }, { type: "INVALID" }, { month: "2026-13" }, { month: "2026-09-01" }, { id: "foreign" }, { goal: -1 }]) await assert.rejects(() => editIncome({ ...payload, ...bad }));
+  await editIncome({ ...payload, notes: "Cannot overwrite", status: "other", userId: "foreign" });
+  assert.equal(row.source, "Corrected"); assert.equal(row.amount, 23.456); assert.equal(row.type, "OTHER"); assert.equal(row.month, original.month); assert.equal(row.goal, 100);
+  await editIncome({ ...payload, month: "2026-08", goal: null });
+  assert.equal(row.month.toISOString(), "2026-08-01T00:00:00.000Z"); assert.equal(row.goal, null);
+  for (const key of ["id", "userId", "notes", "status", "createdAt"]) assert.equal(row[key], original[key]);
+  assert.deepEqual(paths, ["/income", "/", "/income", "/"]);
+});
+
+test("Income edit UI loads persisted fields, retains failure and guards duplicate saves", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [];
+  const { IncomeRecordCard } = load("src/components/domain/income-client.tsx", {
+    FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key] ?? ""; } },
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" }, "@/components/ui/progress-bar": { ProgressBar: "bar" },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { editIncome: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  const record = { id: "i", source: "Old", amount: 10, goal: 100, type: "FREELANCE", month: "2026-09" };
+  let tree;
+  const render = () => { cursor = 0; tree = IncomeRecordCard({ record }); };
+  render(); elements(tree, (node) => node.type === "button")[0].props.onClick(); render();
+  for (const key of ["source", "amount", "goal", "type", "month"]) assert.equal(elements(tree, (node) => node.props.name === key)[0].props.defaultValue, record[key]);
+  const values = { source: "New", amount: "20.5", goal: "", type: "SAVINGS", month: "2026-08" };
+  const submit = () => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {}, currentTarget: values });
+  submit(); submit(); assert.equal(calls.length, 1); assert.equal(calls[0].goal, null); assert.equal(calls[0].month, "2026-08");
+  rejectSave(new Error("offline")); await Promise.all(transitions); render();
+  assert.match(JSON.stringify(tree), /Your edits have been kept/); assert.equal(refreshes, 0);
+  submit(); resolveSave(); await Promise.all(transitions); render();
+  assert.equal(refreshes, 1); assert.equal(elements(tree, (node) => node.type === "form").length, 0);
+});
 test("Health form sends only changed values, guards duplicates, retains failure and refreshes on success", async () => {
   let cursor = 0, refreshes = 0, resolveSave, rejectSave;
   const slots = [], calls = [], transitions = [], routes = [];

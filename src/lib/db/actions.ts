@@ -2,12 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { JobStage, LifeAreaKey } from "@/generated/prisma/enums";
+import { IncomeType, JobStage, LifeAreaKey } from "@/generated/prisma/enums";
 import { dateFromKey, localDateKey, localMidnight } from "@/lib/dates";
 
 import {
   createHealthMetric,
   createIncome,
+  updateIncome,
   createJournalEntry,
   createLanguageStudySession,
   createResource,
@@ -122,6 +123,22 @@ const incomeSchema = z.object({
   type: z.enum(["FREELANCE", "REMOTE_JOB", "SAVINGS", "OTHER"]),
   month: z.coerce.date(),
 });
+
+const editIncomeSchema = z.object({
+  id: z.string().trim().min(1),
+  source: z.string().trim().min(1, "Source is required"),
+  amount: z.number().nonnegative(),
+  goal: z.number().nonnegative().nullable().optional(),
+  type: z.enum(IncomeType),
+  month: z.string().regex(/^\d{4}-\d{2}$/).refine((value) => z.iso.date().safeParse(`${value}-01`).success, "Invalid month").transform((value) => dateFromKey(`${value}-01`)).optional(),
+});
+
+export async function editIncome(input: z.input<typeof editIncomeSchema>) {
+  const { id, ...data } = editIncomeSchema.parse(input);
+  await updateIncome(id, data);
+  revalidatePath("/income");
+  revalidatePath("/");
+}
 
 const healthSchema = z.object({
   date: z.iso.date().refine((day) => day <= localDateKey(new Date()), "Future health dates are not allowed").transform(dateFromKey),
