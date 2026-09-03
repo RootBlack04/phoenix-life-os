@@ -855,6 +855,14 @@ export async function createJournalEntry(data: {
   });
 }
 
+export async function updateJournalEntry(id: string, data: { title: string; content: string; mood: number; date: Date }) {
+  return prisma.journalEntry.update({ where: { id, userId: DEMO_USER_ID }, data });
+}
+
+export async function deleteJournalEntry(id: string) {
+  return prisma.journalEntry.delete({ where: { id, userId: DEMO_USER_ID } });
+}
+
 /* =========================================================
    RESOURCES
    ========================================================= */

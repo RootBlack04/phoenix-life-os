@@ -33,6 +33,7 @@ const errors = [];
 let browser, taskId, optionalTaskId;
 let careerTestId;
 let incomeTestId;
+let journalTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -42,7 +43,70 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_INCOME_ONLY === "1") {
+  if (process.env.PHOENIX_MINDSET_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const weeklyApi = load("src/lib/analytics/weekly.ts");
+    const today = dates.localDateKey(new Date());
+    const correctedDay = dates.addDateDays(today, -1);
+    const baselineWeekly = await weeklyApi.getWeeklyMetrics();
+    const baselineOverview = await db.getOverviewData();
+    const original = await prisma.journalEntry.create({ data: { userId: "demo-user", title: marker, content: `${marker} original`, mood: 2, date: dates.dateFromKey(today) } });
+    journalTestId = original.id;
+    let confirmDelete = false;
+    page.on("dialog", async (dialog) => {
+      assert.ok(dialog.message().includes(marker)); assert.ok(dialog.message().includes("cannot be undone"));
+      if (confirmDelete) await dialog.accept(); else await dialog.dismiss();
+    });
+    await open("/mindset");
+    let article = page.getByRole("article", { name: `Journal entry ${marker}`, exact: true });
+    await article.getByRole("button", { name: "Delete", exact: true }).click();
+    assert.ok(await prisma.journalEntry.findUnique({ where: { id: journalTestId } }));
+    await article.getByRole("button", { name: "Edit", exact: true }).click();
+    const form = article.getByRole("form", { name: "Edit journal entry" });
+    assert.equal(await form.getByLabel("Reflection", { exact: true }).inputValue(), `${marker} original`);
+    await form.getByLabel("Title", { exact: true }).fill(`${marker} edited`);
+    await form.getByLabel("Reflection", { exact: true }).fill(`${marker} corrected`);
+    await form.getByLabel("Mood", { exact: true }).selectOption("5");
+    await form.getByLabel("Date", { exact: true }).fill(correctedDay);
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await article.getByRole("alert").waitFor();
+    assert.equal(await form.getByLabel("Reflection", { exact: true }).inputValue(), `${marker} corrected`);
+    assert.equal((await prisma.journalEntry.findUnique({ where: { id: journalTestId } })).mood, 2);
+    await page.unroute("**/*");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save changes" }).click(); await saved;
+    await page.reload();
+    article = page.getByRole("article", { name: `Journal entry ${marker} edited`, exact: true });
+    await article.waitFor();
+    const updated = await prisma.journalEntry.findUnique({ where: { id: journalTestId } });
+    assert.equal(updated.content, `${marker} corrected`); assert.equal(updated.mood, 5); assert.equal(updated.date.toISOString().slice(0, 10), correctedDay);
+    assert.equal(updated.createdAt.getTime(), original.createdAt.getTime()); assert.equal(updated.userId, original.userId);
+    assert.equal(await prisma.journalEntry.count({ where: { userId: "demo-user", title: { in: [marker, `${marker} edited`] } } }), 1);
+    const weekly = await weeklyApi.getWeeklyMetrics(dates.dateFromKey(correctedDay));
+    const rows = (await db.getMindset()).filter((row) => { const day = row.date.toISOString().slice(0, 10); return day >= weekly.week.start && day <= weekly.week.end; });
+    assert.equal(weekly.current.mindset.averageMood, Math.round(rows.reduce((sum, row) => sum + row.mood, 0) / rows.length * 10) / 10);
+    await article.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    await article.getByRole("button", { name: "Cancel", exact: true }).click();
+    confirmDelete = true;
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await article.getByRole("button", { name: "Delete", exact: true }).click();
+    await article.getByRole("alert").waitFor();
+    assert.ok(await prisma.journalEntry.findUnique({ where: { id: journalTestId } }));
+    await page.unroute("**/*");
+    const deleted = page.waitForResponse((response) => response.request().method() === "POST");
+    await article.getByRole("button", { name: "Delete", exact: true }).click(); await deleted;
+    await page.reload();
+    assert.equal(await article.count(), 0); assert.equal(await prisma.journalEntry.findUnique({ where: { id: journalTestId } }), null);
+    const afterWeekly = await weeklyApi.getWeeklyMetrics();
+    assert.deepEqual(afterWeekly.current.mindset, baselineWeekly.current.mindset); assert.deepEqual(afterWeekly.previous.mindset, baselineWeekly.previous.mindset);
+    const overview = await db.getOverviewData();
+    assert.equal(overview.lifeAreas.find((area) => area.key === "mindset").percent, baselineOverview.lifeAreas.find((area) => area.key === "mindset").percent);
+    await open("/"); assert.deepEqual(errors, []);
+    console.log(`PASS Mindset edit/date/refresh/same ID, failed drafts, confirmation cancel/confirm, failed delete, analytics restored and mobile; deleted ${journalTestId}`);
+  } else if (process.env.PHOENIX_INCOME_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const baseline = (await db.getIncome()).reduce((sum, row) => sum + row.amount, 0);
     const original = await prisma.income.create({ data: { userId: "demo-user", source: marker, amount: 153.25, goal: 500, type: "FREELANCE", month: dates.dateFromKey("2026-09-03"), notes: marker, status: "active" } });
@@ -603,6 +667,10 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (journalTestId) {
+    const removed = await prisma.journalEntry.deleteMany({ where: { id: journalTestId, userId: "demo-user", title: { in: [marker, `${marker} edited`] } } });
+    console.log(`Temporary journal cleanup: ${removed.count ? "removed" : "already deleted"} ${journalTestId}`);
+  }
   if (incomeTestId) {
     const removed = await prisma.income.deleteMany({ where: { id: incomeTestId, userId: "demo-user", notes: marker } });
     assert.equal(removed.count, 1);

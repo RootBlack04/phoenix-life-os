@@ -1,13 +1,11 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardHeader } from "@/components/ui/card";
 import { getMindset } from "@/lib/db";
-import { format } from "date-fns";
 import { MindsetChart } from "@/components/charts/mindset-chart";
-import { MindsetEntryForm } from "@/components/domain/mindset-client";
+import { JournalEntryCard, MindsetEntryForm } from "@/components/domain/mindset-client";
 
 export const dynamic = "force-dynamic";
 
-const moodEmoji = ["", "😔", "😕", "🙂", "😀", "🤩"];
 
 export default async function MindsetPage() {
   const entries = await getMindset();
@@ -16,7 +14,7 @@ export default async function MindsetPage() {
     .slice(0, 7)
     .reverse()
     .map((e) => ({
-      day: format(e.date, "EEE"),
+      day: e.date.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short" }),
       mood: e.mood,
     }));
 
@@ -24,30 +22,12 @@ export default async function MindsetPage() {
     <AppShell title="Mindset">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Journal */}
-        <Card className="lg:col-span-2">
+        <Card className="lg:col-span-2 min-w-0">
           <CardHeader title="Journal" eyebrow="Recent reflections" />
 
           <div className="space-y-3">
-            {entries.map((e) => (
-              <div
-                key={e.id}
-                className="rounded-xl bg-white/[0.03] border border-white/10 p-4"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-semibold text-text-primary">
-                    {e.title}
-                  </p>
-
-                  <span className="text-lg">{moodEmoji[e.mood] ?? "🙂"}</span>
-                </div>
-
-                <p className="text-xs text-text-tertiary mb-2">
-                  {format(e.date, "MMMM d, yyyy")}
-                </p>
-
-                <p className="text-sm text-text-secondary">{e.content}</p>
-              </div>
-            ))}
+            {entries.length === 0 && <p className="text-sm text-text-secondary">No journal entries yet. Add a reflection to get started.</p>}
+            {entries.map((e) => <JournalEntryCard key={e.id} entry={{ id: e.id, title: e.title, content: e.content, mood: e.mood, date: e.date.toISOString().slice(0, 10) }} />)}
           </div>
         </Card>
 

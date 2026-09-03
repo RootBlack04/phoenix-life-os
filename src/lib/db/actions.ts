@@ -10,6 +10,8 @@ import {
   createIncome,
   updateIncome,
   createJournalEntry,
+  updateJournalEntry,
+  deleteJournalEntry,
   createLanguageStudySession,
   createResource,
   deleteResource,
@@ -200,6 +202,24 @@ const journalSchema = z.object({
   mood: z.number().int().min(1).max(5),
   date: z.coerce.date(),
 });
+
+const editJournalSchema = journalSchema.extend({
+  id: z.string().trim().min(1),
+  date: z.iso.date().transform(dateFromKey),
+});
+
+export async function editJournalEntry(input: z.input<typeof editJournalSchema>) {
+  const { id, ...data } = editJournalSchema.parse(input);
+  await updateJournalEntry(id, data);
+  revalidatePath("/mindset");
+  revalidatePath("/");
+}
+
+export async function removeJournalEntry(id: string) {
+  await deleteJournalEntry(z.string().trim().min(1).parse(id));
+  revalidatePath("/mindset");
+  revalidatePath("/");
+}
 
 /* -------------------------------------------------------------------------- */
 /* Notes                                                                      */

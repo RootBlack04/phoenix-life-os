@@ -25,6 +25,65 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Journal edits/deletes validate and scope ownership while preserving identity and metadata", async () => {
+  let row = { id: "j", userId: "demo-user", title: "Before", content: "Before", mood: 3, date: dates.dateFromKey("2026-09-03"), createdAt: new Date() };
+  const original = { ...row }, paths = [];
+  const check = (where) => { assert.equal(where.userId, "demo-user"); if (!row || where.id !== row.id) throw new Error("Not owned"); };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { journalEntry: {
+    update: async ({ where, data }) => { check(where); Object.assign(row, data); return row; },
+    delete: async ({ where }) => { check(where); row = null; },
+  } } } });
+  const actions = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const payload = { id: "j", title: "Edited", content: "Reflection", mood: 5, date: "2026-09-02" };
+  for (const bad of [{ mood: 0 }, { mood: 6 }, { mood: 2.5 }, { mood: "3" }, { date: "2026-02-30" }, { title: " " }, { content: "" }, { id: "foreign" }]) await assert.rejects(() => actions.editJournalEntry({ ...payload, ...bad }));
+  await assert.rejects(() => actions.removeJournalEntry("foreign")); await assert.rejects(() => actions.removeJournalEntry(" "));
+  await actions.editJournalEntry({ ...payload, userId: "foreign" });
+  assert.equal(row.id, original.id); assert.equal(row.userId, original.userId); assert.equal(row.createdAt, original.createdAt);
+  assert.equal(row.content, "Reflection"); assert.equal(row.mood, 5); assert.equal(row.date.toISOString(), "2026-09-02T00:00:00.000Z");
+  await actions.removeJournalEntry("j"); assert.equal(row, null); await assert.rejects(() => actions.removeJournalEntry("j"));
+  assert.deepEqual(paths, ["/mindset", "/", "/mindset", "/"]);
+});
+
+test("Journal UI guards save/delete, confirms exact entry, retains failures and refreshes only on success", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave, confirmed = false;
+  const slots = [], calls = [], transitions = [], prompts = [];
+  const { JournalEntryCard } = load("src/components/domain/mindset-client.tsx", {
+    FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key]; } },
+    window: { confirm: (prompt) => { prompts.push(prompt); return confirmed; } },
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": Object.fromEntries(["editJournalEntry", "removeJournalEntry"].map((name) => [name, (input) => { calls.push({ name, input }); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); }])),
+  });
+  const entry = { id: "j", title: "Private entry", content: "Before", mood: 3, date: "2026-09-02" };
+  let tree;
+  const render = () => { cursor = 0; tree = JournalEntryCard({ entry }); };
+  const button = (text) => elements(tree, (node) => node.type === "button" && node.props.children === text)[0];
+  render(); button("Delete").props.onClick(); assert.equal(calls.length, 0); assert.match(prompts[0], /Private entry.*2026-09-02.*cannot be undone/);
+  button("Edit").props.onClick(); render();
+  for (const key of ["title", "content", "mood", "date"]) assert.equal(elements(tree, (node) => node.props.name === key)[0].props.defaultValue, entry[key]);
+  const submit = () => elements(tree, (node) => node.type === "form")[0].props.onSubmit({ preventDefault() {}, currentTarget: { title: "Edited", content: "Draft", mood: "4", date: "2026-09-01" } });
+  submit(); submit(); assert.equal(calls.length, 1);
+  rejectSave(new Error("offline")); await Promise.all(transitions); render(); assert.match(JSON.stringify(tree), /Your edits have been kept/); assert.equal(refreshes, 0);
+  submit(); resolveSave(); await Promise.all(transitions); render(); assert.equal(refreshes, 1);
+  confirmed = true; button("Delete").props.onClick(); button("Delete").props.onClick(); assert.equal(calls.length, 3);
+  rejectSave(new Error("offline")); await Promise.all(transitions); render(); assert.match(JSON.stringify(tree), /Could not confirm deletion/);
+  button("Delete").props.onClick(); resolveSave(); await Promise.all(transitions); assert.equal(refreshes, 2);
+});
+
+test("Empty Mindset keeps creation available and shows no fabricated history", async () => {
+  const { default: Page } = load("src/app/mindset/page.tsx", {
+    "@/components/layout/app-shell": { AppShell: "shell" }, "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/components/charts/mindset-chart": { MindsetChart: "chart" }, "@/components/domain/mindset-client": { MindsetEntryForm: "create", JournalEntryCard: "entry" },
+    "@/lib/db": { getMindset: async () => [] },
+  });
+  const tree = await Page(); assert.match(JSON.stringify(tree), /No journal entries yet/);
+  assert.equal(elements(tree, (node) => node.type === "create").length, 1); assert.equal(elements(tree, (node) => node.type === "entry").length, 0);
+});
 test("Income edit validates values and preserves owner, ID and unrelated data", async () => {
   const row = { id: "income", userId: "demo-user", source: "Before", amount: 12, goal: 100, type: "FREELANCE", month: dates.dateFromKey("2026-09-03"), status: "active", notes: "Keep", createdAt: new Date() };
   const original = { ...row }, paths = [];
