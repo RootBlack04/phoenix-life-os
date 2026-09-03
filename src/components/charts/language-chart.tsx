@@ -1,7 +1,5 @@
 "use client";
 
-import { ResponsiveContainer, LineChart, Line, XAxis, Tooltip } from "recharts";
-
 type LanguageChartProps = {
   data: {
     week: string;
@@ -10,34 +8,15 @@ type LanguageChartProps = {
 };
 
 export function LanguageChart({ data }: LanguageChartProps) {
+  if (!data.length) return <p className="text-xs text-text-tertiary">No stored assessments yet.</p>;
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={data}>
-        <XAxis
-          dataKey="week"
-          stroke="var(--text-tertiary)"
-          fontSize={11}
-          tickLine={false}
-          axisLine={false}
-        />
-
-        <Tooltip
-          contentStyle={{
-            background: "#0d1020",
-            border: "1px solid rgba(148,163,255,0.2)",
-            borderRadius: 12,
-            fontSize: 12,
-          }}
-        />
-
-        <Line
-          type="monotone"
-          dataKey="score"
-          stroke="var(--accent-blue-soft)"
-          strokeWidth={2.5}
-          dot={{ r: 3 }}
-        />
-      </LineChart>
-    </ResponsiveContainer>
+    <ul aria-label="Stored assessment observations" className="space-y-2 max-h-40 overflow-y-auto">
+      {data.map((point, index) => (
+        <li key={index} className="flex justify-between gap-3 rounded-lg glass px-3 py-2 text-xs">
+          <span className="text-text-tertiary break-words min-w-0">Stored label: {point.week}</span>
+          <span className="text-text-primary shrink-0">Score: {point.score}</span>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -47,7 +47,38 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_LANGUAGES_ONLY === "1") {
+  if (process.env.PHOENIX_LANGUAGE_TRUTH_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const week = dates.weekTimestampRange(dates.mondayKey());
+    const original = await prisma.language.create({ data: {
+      userId: "demo-user", code: marker, name: "Verification language", flag: "T", currentLevel: "A1", targetLevel: "B1",
+      percent: 65, hoursLogged: 138, vocabulary: 55, grammar: 20, listening: 100, speaking: 5, writing: 25, reading: 10, weeklyGoalHours: 6,
+    } });
+    languageTestId = original.id;
+    for (const minutes of [30, 45, 30]) await prisma.languageStudySession.create({ data: { languageId: original.id, date: week.start, minutes, skill: "reading", note: marker } });
+    for (const [label, score] of [["W1", 25], ["W3", 40]]) await prisma.languageProgress.create({ data: { languageId: original.id, week: label, score } });
+    await open("/languages");
+    const card = page.locator('.glass-hover').filter({ has: page.getByRole("heading", { name: "Verification language", exact: true }) });
+    const check = async () => {
+      await card.getByText("Skill average", { exact: true }).waitFor();
+      assert.equal(await card.getByText("36%", { exact: true }).count(), 1);
+      assert.equal(await card.getByText("65%", { exact: true }).count(), 0);
+      assert.equal(await card.getByText("1h 45m", { exact: true }).count(), 1);
+      assert.ok((await card.innerText()).includes("This week: 1h 45m logged / 6h weekly goal"));
+      assert.equal(await card.getByText("138h", { exact: true }).count(), 0);
+      const history = card.getByRole("list", { name: "Stored assessment observations" });
+      assert.equal(await history.getByRole("listitem").count(), 2);
+      assert.equal(await history.locator("svg").count(), 0);
+      assert.equal((await history.innerText()).includes("W2"), false);
+      assert.ok((await card.innerText()).includes("Recent sessions · latest 3 of 3"));
+    };
+    await check(); await page.reload(); await check();
+    await page.setViewportSize({ width: 390, height: 844 }); await card.getByText("Skill average", { exact: true }).waitFor();
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    assert.deepEqual(await prisma.language.findUnique({ where: { id: original.id } }), original);
+    assert.deepEqual(errors, []);
+    console.log("PASS Languages truthfulness: 36% skills, 1h 45m sessions/week, only stored history points, refresh/mobile and unchanged snapshots");
+  } else if (process.env.PHOENIX_LANGUAGES_ONLY === "1") {
     const original = await prisma.language.create({ data: {
       userId: "demo-user", code: marker, name: "Verification language", flag: "T", currentLevel: "A1", targetLevel: "B1",
       percent: 73, vocabulary: 10, grammar: 20, listening: 30, speaking: 40, writing: 50, reading: 60, hoursLogged: 12,

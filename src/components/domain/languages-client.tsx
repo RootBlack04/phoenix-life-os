@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { DetailProgress } from "@/components/ui/detail-progress";
 import { LanguageChart } from "@/components/charts/language-chart";
+import { APP_TIMEZONE } from "@/lib/dates";
 
 type SkillKey =
   | "vocabulary"
@@ -84,8 +85,10 @@ function formatSessionDate(date: string) {
   }
 
   return parsed.toLocaleDateString("en-GB", {
+    timeZone: APP_TIMEZONE,
     day: "2-digit",
     month: "short",
+    year: "numeric",
   });
 }
 
@@ -93,10 +96,18 @@ function skillLabel(skill: string) {
   return skill.charAt(0).toUpperCase() + skill.slice(1);
 }
 
+function formatStudyTime(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  return hours ? `${hours}h${remaining ? ` ${remaining}m` : ""}` : `${minutes}m`;
+}
+
 export function LanguagesClient({
   initialLanguages,
+  activeWeek,
 }: {
   initialLanguages: Language[];
+  activeWeek: { start: string; endExclusive: string };
 }) {
   const languages = initialLanguages;
   const router = useRouter();
@@ -151,7 +162,14 @@ export function LanguagesClient({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
       {error && <p role="alert" className="col-span-full text-sm text-danger">{error}</p>}
-      {languages.map((language) => (
+      {languages.map((language) => {
+        const skillAverage = Math.round(skills.reduce((sum, skill) => sum + language[skill.key], 0) / skills.length);
+        const loggedMinutes = language.studySessions.reduce((sum, session) => sum + session.minutes, 0);
+        const weeklyMinutes = language.studySessions.reduce((sum, session) => {
+          const timestamp = new Date(session.date).getTime();
+          return sum + (timestamp >= Date.parse(activeWeek.start) && timestamp < Date.parse(activeWeek.endExclusive) ? session.minutes : 0);
+        }, 0);
+        return (
         <Card key={language.id}>
           <div className="flex items-start justify-between mb-5">
             <div className="flex items-center gap-3">
@@ -172,17 +190,20 @@ export function LanguagesClient({
               </div>
             </div>
 
+            <div className="shrink-0 text-center">
             <ProgressRing
-              percent={language.percent}
+              percent={skillAverage}
               size={72}
               strokeWidth={6}
               color="var(--accent-blue)"
               colorTo="var(--accent-purple)"
             >
               <span className="font-display text-sm font-bold">
-                {language.percent}%
+                {skillAverage}%
               </span>
             </ProgressRing>
+            <p className="mt-1 text-[10px] text-text-tertiary">Skill average</p>
+            </div>
           </div>
 
           <div className="space-y-3 mb-5">
@@ -194,11 +215,11 @@ export function LanguagesClient({
           <div className="grid grid-cols-3 gap-3 mb-5">
             <div className="glass rounded-xl p-3 text-center">
               <p className="font-display text-lg font-bold text-text-primary">
-                {language.hoursLogged}h
+                {formatStudyTime(loggedMinutes)}
               </p>
 
               <p className="text-[10px] text-text-tertiary mt-0.5">
-                Stored lifetime hours
+                Logged study time
               </p>
             </div>
 
@@ -224,15 +245,19 @@ export function LanguagesClient({
           </div>
 
           <div className="mb-5">
+            <p className="mb-5 text-xs text-text-secondary">
+              This week: {formatStudyTime(weeklyMinutes)} logged / {language.weeklyGoalHours}h weekly goal · Casablanca
+            </p>
             <div className="flex items-center justify-between mb-2">
               <div>
                 <p className="text-xs uppercase tracking-wider text-text-tertiary">
-                  CEFR Progress
+                  CEFR assessment history
                 </p>
               </div>
             </div>
 
-            <div className="h-[120px] -ml-4">
+            <p className="mb-3 text-xs text-text-tertiary">Stored history scores, which may include bootstrap entries. Not calculated from study sessions.</p>
+            <div>
               <LanguageChart data={language.weeklyTrend} />
             </div>
           </div>
@@ -327,6 +352,7 @@ export function LanguagesClient({
               </fieldset>
             )}
 
+            <p className="mb-2 text-xs text-text-tertiary">Recent sessions · latest {Math.min(5, language.studySessions.length)} of {language.studySessions.length} · Casablanca dates</p>
             {language.studySessions.length === 0 ? (
               <div className="glass rounded-xl p-4 text-center">
                 <Clock3 className="h-4 w-4 mx-auto mb-2 text-text-tertiary" />
@@ -363,7 +389,7 @@ export function LanguagesClient({
             )}
           </div>
         </Card>
-      ))}
+      ); })}
     </div>
   );
 }

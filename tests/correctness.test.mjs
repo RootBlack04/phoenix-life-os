@@ -25,6 +25,40 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Languages display real skill/session summaries, Casablanca boundaries and discrete history", () => {
+  const { LanguagesClient } = load("src/components/domain/languages-client.tsx", {
+    react: { useState: (v) => [v, () => {}], useTransition: () => [false, () => {}] },
+    "next/navigation": { useRouter: () => ({ refresh() {} }) }, "@/lib/db/actions": {},
+    "@/components/ui/card": { Card: "card" }, "@/components/ui/badge": { Badge: "badge" },
+    "@/components/ui/progress-ring": { ProgressRing: "ring" }, "@/components/ui/detail-progress": { DetailProgress: "detail" },
+    "@/components/charts/language-chart": { LanguageChart: "history" },
+  });
+  const range = dates.weekTimestampRange("2026-08-31");
+  const activeWeek = { start: range.start.toISOString(), endExclusive: range.endExclusive.toISOString() };
+  const text = (n) => n == null || typeof n === "boolean" ? "" : typeof n !== "object" ? String(n) : Array.isArray(n) ? n.map(text).join("") : text(n.props?.children);
+  const language = { id: "l", vocabulary: 55, grammar: 20, listening: 100, speaking: 5, writing: 25, reading: 10, percent: 65, hoursLogged: 138, dailyGoalMinutes: 30, weeklyGoalHours: 6,
+    weeklyTrend: [{ week: "W1", score: 25 }, { week: "W3", score: 40 }],
+    studySessions: [
+      { id: "1", date: activeWeek.start, minutes: 30, skill: "reading" },
+      { id: "2", date: "2026-09-02T12:00:00Z", minutes: 45, skill: "reading" },
+      { id: "3", date: activeWeek.endExclusive, minutes: 30, skill: "reading" },
+    ] };
+  const render = (value = language) => LanguagesClient({ initialLanguages: [value], activeWeek });
+  const tree = render();
+  assert.equal(elements(tree, (n) => n.type === "ring")[0].props.percent, 36);
+  assert.ok(text(tree).includes("1h 45m")); assert.ok(text(tree).includes("This week: 1h 15m logged / 6h weekly goal"));
+  assert.ok(text(tree).includes("31 Aug 2026")); assert.ok(text(tree).includes("Recent sessions · latest 3 of 3"));
+  assert.equal(text(tree).includes("138h"), false);
+  assert.ok(text(render({ ...language, studySessions: [] })).includes("0m"));
+  assert.ok(text(render({ ...language, studySessions: language.studySessions.slice(1, 2) })).includes("45m"));
+  assert.ok(text(render({ ...language, studySessions: Array.from({ length: 6 }, (_, i) => ({ ...language.studySessions[0], id: String(i) })) })).includes("latest 5 of 6"));
+  const { LanguageChart } = load("src/components/charts/language-chart.tsx");
+  const history = LanguageChart({ data: language.weeklyTrend });
+  assert.equal(elements(history, (n) => n.type === "li").length, 2);
+  assert.ok(text(history).includes("W3")); assert.equal(text(history).includes("W2"), false);
+  assert.ok(text(LanguageChart({ data: [] })).includes("No stored assessments"));
+  assert.doesNotMatch(fs.readFileSync(path.join(root, "src/components/charts/language-chart.tsx"), "utf8"), /monotone|LineChart|recharts/);
+});
 test("Language weekly metrics remain session-based, independent of stored skills and lifetime hours", async () => {
   const language = { percent: 73, speaking: 40, hoursLogged: 900, weeklyGoalHours: 4, studySessions: [{ minutes: 30 }, { minutes: 60 }] };
   const prisma = Object.fromEntries(["habit", "language", "engineeringTrack", "project", "jobApplication", "healthMetric", "journalEntry", "task", "dailyMetric"].map((name) => [name, { findMany: async () => name === "language" ? [language] : [] }]));
