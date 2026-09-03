@@ -567,9 +567,7 @@ export async function getLanguages() {
       },
 
       studySessions: {
-        orderBy: {
-          date: "desc",
-        },
+        orderBy: [{ date: "desc" }, { id: "desc" }],
       },
     },
 
@@ -626,6 +624,18 @@ export async function createLanguageStudySession(data: {
       note: data.note,
     },
   });
+}
+
+export async function updateLanguageStudySession(
+  id: string,
+  data: { minutes: number; skill: string; note?: string | null; date: Date },
+  expected: { minutes: number; skill: string; note: string | null; date: Date },
+) {
+  const result = await prisma.languageStudySession.updateMany({
+    where: { id, language: { userId: DEMO_USER_ID }, date: expected.date, minutes: expected.minutes, skill: expected.skill, note: expected.note },
+    data: { minutes: data.minutes, skill: data.skill, date: data.date, ...(data.note !== undefined ? { note: data.note } : {}) },
+  });
+  if (result.count !== 1) throw new Error("Session unavailable or changed. Reload it before retrying.");
 }
 
 export async function updateLanguageSkills(

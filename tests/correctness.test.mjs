@@ -25,6 +25,66 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Session corrections preserve identity/owner, validate fields, guard stale writes and move Casablanca weeks", async () => {
+  const row = { id: "s", languageId: "l", date: new Date("2026-08-30T12:30:00Z"), minutes: 30, skill: "listening", note: "original" };
+  const paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { languageStudySession: { updateMany: async ({ where, data }) => {
+    assert.equal(where.language.userId, "demo-user");
+    assert.equal("languageId" in data, false); assert.equal("id" in data, false);
+    if (where.id !== row.id || where.date.getTime() !== row.date.getTime() || where.minutes !== row.minutes || where.skill !== row.skill || where.note !== row.note) return { count: 0 };
+    Object.assign(row, data); return { count: 1 };
+  } } } } });
+  const { editLanguageStudySession } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (p) => paths.push(p) } });
+  const expected = () => ({ date: row.date.toISOString(), minutes: row.minutes, skill: row.skill, note: row.note });
+  const originalExpected = expected();
+  const payload = { id: "s", dateKey: "2026-08-30", minutes: 45, skill: "reading", expected: originalExpected };
+  for (const id of ["foreign", "missing", ""]) await assert.rejects(() => editLanguageStudySession({ ...payload, id }));
+  for (const minutes of [0, -1, 1441, 1.5, NaN, "30"]) await assert.rejects(() => editLanguageStudySession({ ...payload, minutes }));
+  for (const dateKey of ["2026-02-30", "bad", "2026-9-03"]) await assert.rejects(() => editLanguageStudySession({ ...payload, dateKey }));
+  await assert.rejects(() => editLanguageStudySession({ ...payload, skill: "invalid" }));
+  await assert.rejects(() => editLanguageStudySession({ ...payload, note: "x".repeat(501) }));
+  await assert.rejects(() => editLanguageStudySession({ ...payload, expected: { ...originalExpected, date: "bad" } }));
+  await editLanguageStudySession({ ...payload, languageId: "foreign" });
+  assert.equal(row.date.toISOString(), originalExpected.date); assert.equal(row.note, "original");
+  assert.equal(row.minutes, 45); assert.equal(row.skill, "reading");
+  await assert.rejects(() => editLanguageStudySession(payload));
+  await editLanguageStudySession({ ...payload, dateKey: "2026-08-31", note: "replaced", expected: expected() });
+  assert.equal(row.date.toISOString(), "2026-08-30T23:00:00.000Z");
+  assert.equal(dates.mondayKey(row.date), "2026-08-31"); assert.equal(row.note, "replaced");
+  await editLanguageStudySession({ ...payload, dateKey: "2026-08-31", note: "", expected: expected() });
+  assert.equal(row.note, null); assert.equal(row.id, "s"); assert.equal(row.languageId, "l");
+  assert.equal(paths.length, 6);
+  const source = fs.readFileSync(path.join(root, "src/lib/db/index.ts"), "utf8");
+  assert.match(source, /orderBy: \[\{ date: "desc" \}, \{ id: "desc" \}\]/);
+});
+
+test("Session editor loads persisted values, keeps failed drafts and guards duplicate saves", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave, closed = 0;
+  const slots = [], calls = [], transitions = [];
+  const { LanguagesClient } = load("src/components/domain/languages-client.tsx", {
+    react: { useState: (v) => { const i = cursor++; if (!(i in slots)) slots[i] = v; return [slots[i], (next) => { slots[i] = next; }]; }, useRef: (v) => { const i = cursor++; return slots[i] ??= { current: v }; }, useTransition: () => [false, (fn) => transitions.push(fn())] },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { editLanguageStudySession: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+    "@/components/ui/card": { Card: "card" }, "@/components/ui/badge": { Badge: "badge" }, "@/components/ui/progress-ring": { ProgressRing: "ring" }, "@/components/ui/detail-progress": { DetailProgress: "detail" }, "@/components/charts/language-chart": { LanguageChart: "chart" },
+  });
+  const session = { id: "s", date: "2026-09-02T23:30:00Z", minutes: 30, skill: "listening", note: "original" };
+  const page = LanguagesClient({ initialLanguages: [{ id: "l", studySessions: [session] }], activeWeek: { start: "2026-08-30T23:00:00Z", endExclusive: "2026-09-06T23:00:00Z" } });
+  const correction = elements(page, (n) => n.props?.session === session)[0];
+  slots.length = 0; cursor = 0;
+  elements(correction.type(correction.props), (n) => n.type === "button")[0].props.onClick();
+  cursor = 0; const formElement = elements(correction.type(correction.props), (n) => typeof n.type === "function")[0];
+  slots.length = 0;
+  const render = () => { cursor = 0; return formElement.type({ ...formElement.props, close: () => closed++ }); };
+  const input = (type) => elements(render(), (n) => n.type === "input" && n.props.type === type)[0];
+  assert.equal(input("number").props.value, "30"); assert.equal(input("date").props.value, "2026-09-03");
+  input("number").props.onChange({ target: { value: "45" } });
+  const submit = () => render().props.onSubmit({ preventDefault() {} });
+  submit(); submit(); assert.equal(calls.length, 1);
+  rejectSave(new Error("failed")); await transitions.pop();
+  assert.equal(input("number").props.value, "45"); assert.equal(closed, 0);
+  assert.equal(elements(render(), (n) => n.props?.role === "alert").length, 1);
+  submit(); resolveSave(); await transitions.pop(); assert.equal(closed, 1); assert.equal(refreshes, 1);
+});
 test("Habit weekly metrics count completed booleans once and retain target semantics", async () => {
   const habit = { target: 3, logs: [] };
   const prisma = Object.fromEntries(["habit", "language", "engineeringTrack", "project", "jobApplication", "healthMetric", "journalEntry", "task", "dailyMetric"].map((name) => [name, { findMany: async () => name === "habit" ? [habit] : [] }]));

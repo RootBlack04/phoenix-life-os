@@ -13,6 +13,7 @@ import {
   updateJournalEntry,
   deleteJournalEntry,
   createLanguageStudySession,
+  updateLanguageStudySession,
   createResource,
   updateResource,
   deleteResource,
@@ -206,6 +207,32 @@ const languageSkillsSchema = z.object({
   value: z.number().int().min(0).max(100),
   expectedValue: z.number().int().min(0).max(100),
 });
+
+const editLanguageSessionSchema = z.object({
+  id: z.string().trim().min(1),
+  minutes: languageStudySessionSchema.shape.minutes,
+  skill: languageStudySessionSchema.shape.skill,
+  note: z.string().max(500).nullable().optional(),
+  dateKey: z.string().refine(isValidDateKey, "Enter a valid YYYY-MM-DD date"),
+  expected: z.object({
+    date: z.iso.datetime().transform((value) => new Date(value)),
+    minutes: languageStudySessionSchema.shape.minutes,
+    skill: z.string(),
+    note: z.string().nullable(),
+  }),
+});
+
+export async function editLanguageStudySession(input: z.input<typeof editLanguageSessionSchema>) {
+  const data = editLanguageSessionSchema.parse(input);
+  await updateLanguageStudySession(data.id, {
+    minutes: data.minutes,
+    skill: data.skill,
+    ...(data.note !== undefined ? { note: data.note?.trim() || null } : {}),
+    date: data.dateKey === localDateKey(data.expected.date) ? data.expected.date : localMidnight(data.dateKey),
+  }, data.expected);
+  revalidatePath("/languages");
+  revalidatePath("/");
+}
 
 const journalSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(120),

@@ -48,7 +48,56 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_HABITS_ONLY === "1") {
+  if (process.env.PHOENIX_SESSION_EDIT_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const today = dates.localDateKey(new Date());
+    const previousDay = dates.addDateDays(dates.mondayKey(), -1);
+    const language = await prisma.language.create({ data: { userId: "demo-user", code: marker, name: "Verification language", flag: "T", currentLevel: "A1", targetLevel: "B1" } });
+    languageTestId = language.id;
+    const original = await prisma.languageStudySession.create({ data: { languageId: language.id, date: dates.localMidnight(previousDay), minutes: 30, skill: "listening", note: marker } });
+    const analytics = load("src/lib/analytics/weekly.ts");
+    const before = await analytics.getWeeklyMetrics();
+    await open("/languages");
+    const card = page.locator('.glass-hover').filter({ has: page.getByRole("heading", { name: "Verification language", exact: true }) });
+    await card.getByRole("button", { name: "Edit", exact: true }).click();
+    const form = card.getByRole("form", { name: "Edit study session" });
+    assert.equal(await form.getByLabel("Minutes", { exact: true }).inputValue(), "30");
+    assert.equal(await form.getByLabel("Date (Casablanca)").inputValue(), previousDay);
+    await form.getByLabel("Minutes", { exact: true }).fill("45");
+    await form.getByLabel("Skill", { exact: true }).selectOption("reading");
+    await form.getByLabel("Note", { exact: true }).fill(`${marker} edited`);
+    await form.getByLabel("Date (Casablanca)").fill(today);
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Save correction" }).click(); await form.getByRole("alert").waitFor();
+    assert.equal(await form.getByLabel("Minutes", { exact: true }).inputValue(), "45");
+    assert.equal((await prisma.languageStudySession.findUnique({ where: { id: original.id } })).minutes, 30);
+    await page.unroute("**/*");
+    let release, requests = 0;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/*", async (route) => { if (route.request().method() === "POST") { requests++; await held; } await route.continue(); });
+    await form.getByRole("button", { name: "Save correction" }).click(); await form.dispatchEvent("submit");
+    const saved = page.waitForResponse((r) => r.request().method() === "POST"); release(); await saved; await page.unroute("**/*"); await page.reload();
+    const updated = await prisma.languageStudySession.findUnique({ where: { id: original.id } });
+    assert.equal(requests, 1); assert.equal(updated.id, original.id); assert.equal(updated.languageId, original.languageId);
+    assert.equal(updated.minutes, 45); assert.equal(updated.skill, "reading"); assert.equal(updated.note, `${marker} edited`);
+    assert.equal(updated.date.getTime(), dates.localMidnight(today).getTime());
+    assert.equal(await prisma.languageStudySession.count({ where: { languageId: language.id } }), 1);
+    const after = await analytics.getWeeklyMetrics();
+    assert.equal(after.current.languages.studyMinutes, before.current.languages.studyMinutes + 45);
+    assert.equal(after.previous.languages.studyMinutes, before.previous.languages.studyMinutes - 30);
+    await card.getByText("45m", { exact: true }).waitFor();
+    assert.ok((await card.innerText()).includes("This week: 45m logged"));
+    await card.getByRole("button", { name: "Edit", exact: true }).click();
+    await form.getByLabel("Note", { exact: true }).fill("");
+    const cleared = page.waitForResponse((r) => r.request().method() === "POST"); await form.getByRole("button", { name: "Save correction" }).click(); await cleared; await page.reload();
+    assert.equal((await prisma.languageStudySession.findUnique({ where: { id: original.id } })).note, null);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await card.getByRole("button", { name: "Edit", exact: true }).click(); await form.waitFor();
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    assert.deepEqual(await prisma.language.findUnique({ where: { id: language.id } }), language);
+    assert.deepEqual(errors, []);
+    console.log("PASS Session correction: same ID/parent, minutes/skill/note/date, clear note, failure draft, duplicate guard, exact weekly transfer, refresh and mobile");
+  } else if (process.env.PHOENIX_HABITS_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const today = dates.localDateKey(new Date());
     const original = await prisma.habit.create({ data: { userId: "demo-user", name: marker, emoji: "T", target: 7 } });
@@ -919,8 +968,8 @@ try {
     console.log(`REMOVED exact temporary Habit ${habitTestId} and ${logs.length} logs`);
   }
   if (languageTestId) {
-    const sessions = await prisma.languageStudySession.findMany({ where: { languageId: languageTestId, note: marker }, select: { id: true } });
-    for (const session of sessions) await prisma.languageStudySession.deleteMany({ where: { id: session.id, languageId: languageTestId, note: marker } });
+    const sessions = await prisma.languageStudySession.findMany({ where: { languageId: languageTestId }, select: { id: true } });
+    for (const session of sessions) await prisma.languageStudySession.deleteMany({ where: { id: session.id, languageId: languageTestId } });
     const removed = await prisma.language.deleteMany({ where: { id: languageTestId, userId: "demo-user", code: marker } });
     assert.equal(removed.count, 1);
     console.log(`REMOVED exact temporary Language ${languageTestId} and ${sessions.length} test sessions`);

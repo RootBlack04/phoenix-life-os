@@ -4,14 +4,14 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Minus, BookOpen, Clock3 } from "lucide-react";
 
-import { addLanguageStudySession, setLanguageSkills } from "@/lib/db/actions";
+import { addLanguageStudySession, editLanguageStudySession, setLanguageSkills } from "@/lib/db/actions";
 
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { DetailProgress } from "@/components/ui/detail-progress";
 import { LanguageChart } from "@/components/charts/language-chart";
-import { APP_TIMEZONE } from "@/lib/dates";
+import { APP_TIMEZONE, localDateKey } from "@/lib/dates";
 
 type SkillKey =
   | "vocabulary"
@@ -366,7 +366,7 @@ export function LanguagesClient({
                 {language.studySessions.slice(0, 5).map((session) => (
                   <div
                     key={session.id}
-                    className="glass rounded-xl px-3 py-2.5 flex items-center justify-between gap-3"
+                    className="glass rounded-xl px-3 py-2.5 flex flex-wrap items-center justify-between gap-3"
                   >
                     <div className="min-w-0">
                       <p className="text-xs font-medium text-text-primary">
@@ -383,6 +383,7 @@ export function LanguagesClient({
                     <span className="text-[10px] text-text-tertiary shrink-0">
                       {formatSessionDate(session.date)}
                     </span>
+                    <SessionCorrection session={session} />
                   </div>
                 ))}
               </div>
@@ -392,6 +393,58 @@ export function LanguagesClient({
       ); })}
     </div>
   );
+}
+
+function SessionCorrection({ session }: { session: StudySession }) {
+  const [editing, setEditing] = useState(false);
+  return <div className="w-full">
+    {editing ? <SessionEditForm session={session} close={() => setEditing(false)} /> :
+      <button type="button" className="text-xs text-accent-blue-soft" onClick={() => setEditing(true)}>Edit</button>}
+  </div>;
+}
+
+function SessionEditForm({ session, close }: { session: StudySession; close: () => void }) {
+  const [original] = useState(session);
+  const [minutes, setMinutes] = useState(String(session.minutes));
+  const [skill, setSkill] = useState(session.skill);
+  const [note, setNote] = useState(session.note ?? "");
+  const [dateKey, setDateKey] = useState(localDateKey(new Date(session.date)));
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const saving = useRef(false);
+  const router = useRouter();
+  function save() {
+    if (saving.current || pending) return;
+    saving.current = true;
+    setError(null);
+    start(async () => {
+      try {
+        await editLanguageStudySession({ id: original.id, minutes: Number(minutes), skill: skill as SkillKey, note, dateKey,
+          expected: { date: original.date, minutes: original.minutes, skill: original.skill, note: original.note ?? null } });
+        router.refresh();
+        close();
+      } catch {
+        setError("Could not save the correction. Your draft is kept. If this session changed elsewhere, cancel and reload before editing again.");
+      } finally { saving.current = false; }
+    });
+  }
+  const inputClass = "mt-1 w-full min-w-0 rounded-lg bg-black/20 border border-white/10 px-3 py-2 text-sm text-text-primary";
+  return <form aria-label="Edit study session" onSubmit={(event) => { event.preventDefault(); save(); }}>
+    <fieldset disabled={pending} className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-xs text-text-tertiary">Minutes<input className={inputClass} type="number" min={1} max={1440} step={1} required value={minutes} onChange={(event) => setMinutes(event.target.value)} /></label>
+        <label className="text-xs text-text-tertiary">Skill<select aria-label="Skill" className={inputClass} value={skill} onChange={(event) => setSkill(event.target.value)}>{studySkills.map((value) => <option key={value} value={value}>{skillLabel(value)}</option>)}</select></label>
+      </div>
+      <label className="block text-xs text-text-tertiary">Date (Casablanca)<input className={inputClass} type="date" required value={dateKey} onChange={(event) => setDateKey(event.target.value)} /></label>
+      <p className="text-[10px] text-text-tertiary">Changing the date sets the time to midnight in Casablanca. Otherwise the original time is preserved.</p>
+      <label className="block text-xs text-text-tertiary">Note<input className={inputClass} maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} /></label>
+      {error && <p role="alert" className="text-xs text-danger">{error}</p>}
+      <div className="flex gap-3 text-xs">
+        <button type="submit" className="rounded-lg bg-white/10 px-3 py-2">{pending ? "Saving..." : "Save correction"}</button>
+        <button type="button" onClick={close}>Cancel</button>
+      </div>
+    </fieldset>
+  </form>;
 }
 
 function SkillControl({ languageId, skill, label, value }: {
