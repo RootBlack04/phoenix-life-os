@@ -25,6 +25,57 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Resource metadata validates, preserves progress/timestamps and scopes update/delete", async () => {
+  let row = { id: "r", userId: "demo-user", title: "Before", tag: "Study", type: "COURSE", url: "https://example.com", progress: 45, completed: false, createdAt: new Date() };
+  const original = { ...row }, paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { resource: {
+    update: async ({ where, data }) => { assert.equal(where.userId, "demo-user"); if (where.id !== row.id) throw new Error("Not owned"); Object.assign(row, Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined))); return row; },
+    deleteMany: async ({ where }) => { assert.equal(where.userId, "demo-user"); if (row?.id !== where.id) return { count: 0 }; row = null; return { count: 1 }; },
+  } } } });
+  const actions = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const payload = { id: "r", title: "Edited", type: "BOOK", tag: "Reading", url: "https://example.com/book" };
+  for (const bad of [{ title: " " }, { tag: "" }, { type: "INVALID" }, { url: "not a URL" }, { id: "foreign" }]) await assert.rejects(() => actions.editResource({ ...payload, ...bad }));
+  await actions.editResource({ ...payload, progress: 100, completed: true, userId: "foreign" });
+  assert.equal(row.title, "Edited"); assert.equal(row.type, "BOOK"); assert.equal(row.url, payload.url);
+  for (const key of ["id", "userId", "progress", "completed", "createdAt"]) assert.equal(row[key], original[key]);
+  await actions.editResource({ ...payload, url: "" }); assert.equal(row.url, null);
+  await actions.removeResource("foreign"); assert.ok(row);
+  await assert.rejects(() => actions.removeResource(" "));
+  await actions.removeResource("r"); assert.equal(row, null);
+  assert.ok(paths.every((path) => path === "/resources"));
+});
+
+test("Resources UI loads metadata, guards duplicates, confirms deletion and retains failures", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave, confirmed = false;
+  const slots = [], calls = [], transitions = [], prompts = [];
+  const { ResourcesClient } = load("src/components/domain/resources-client.tsx", {
+    FormData: class { constructor(values) { this.values = values; } get(key) { return this.values[key]; } },
+    window: { confirm: (prompt) => { prompts.push(prompt); return confirmed; } },
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": Object.fromEntries(["editResource", "removeResource"].map((name) => [name, (input) => { calls.push({ name, input }); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); }])),
+  });
+  const resource = { id: "r", title: "Resource", type: "BOOK", tag: "Study", url: "https://example.com", progress: 45, completed: false };
+  let tree;
+  const render = (resources = [resource]) => { cursor = 0; tree = ResourcesClient({ resources }); };
+  const button = (text) => elements(tree, (node) => node.type === "button" && node.props.children === text)[0];
+  render([]); assert.match(JSON.stringify(tree), /No resources yet/); assert.equal(elements(tree, (node) => node.type === "form").length, 1);
+  render(); button("Delete").props.onClick(); assert.equal(calls.length, 0); assert.match(prompts[0], /Resource.*cannot be undone/);
+  button("Edit").props.onClick(); render();
+  const form = () => elements(tree, (node) => node.props["aria-label"] === "Edit resource")[0];
+  for (const key of ["title", "type", "tag", "url"]) assert.equal(elements(form(), (node) => node.props.name === key)[0].props.defaultValue, resource[key]);
+  const submit = () => form().props.onSubmit({ preventDefault() {}, currentTarget: { title: "Edited", type: "LINK", tag: "Study", url: "" } });
+  submit(); submit(); assert.equal(calls.length, 1);
+  rejectSave(new Error("offline")); await Promise.all(transitions); render(); assert.match(JSON.stringify(tree), /Your edits have been kept/); assert.equal(refreshes, 0);
+  submit(); resolveSave(); await Promise.all(transitions); render(); assert.equal(refreshes, 1);
+  confirmed = true; button("Delete").props.onClick(); button("Delete").props.onClick(); assert.equal(calls.length, 3);
+  rejectSave(new Error("offline")); await Promise.all(transitions); render(); assert.match(JSON.stringify(tree), /Could not confirm deletion/);
+  button("Delete").props.onClick(); resolveSave(); await Promise.all(transitions); assert.equal(refreshes, 2);
+});
 test("Journal edits/deletes validate and scope ownership while preserving identity and metadata", async () => {
   let row = { id: "j", userId: "demo-user", title: "Before", content: "Before", mood: 3, date: dates.dateFromKey("2026-09-03"), createdAt: new Date() };
   const original = { ...row }, paths = [];

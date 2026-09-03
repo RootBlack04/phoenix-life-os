@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { IncomeType, JobStage, LifeAreaKey } from "@/generated/prisma/enums";
+import { IncomeType, JobStage, LifeAreaKey, ResourceType } from "@/generated/prisma/enums";
 import { dateFromKey, localDateKey, localMidnight } from "@/lib/dates";
 
 import {
@@ -14,6 +14,7 @@ import {
   deleteJournalEntry,
   createLanguageStudySession,
   createResource,
+  updateResource,
   deleteResource,
   setResourceCompleted as updateResourceCompleted,
   updateResourceProgress,
@@ -159,6 +160,18 @@ const resourceSchema = z.object({
   tag: z.string().trim().min(1, "Tag is required").max(40),
   url: z.string().url().optional().or(z.literal("")),
 });
+
+const editResourceSchema = resourceSchema.omit({ progress: true }).extend({
+  id: z.string().trim().min(1),
+  type: z.enum(ResourceType),
+  url: z.union([z.string().url(), z.literal(""), z.null()]).optional().transform((value) => value === "" ? null : value),
+});
+
+export async function editResource(input: z.input<typeof editResourceSchema>) {
+  const { id, ...data } = editResourceSchema.parse(input);
+  await updateResource(id, data);
+  revalidatePath("/resources");
+}
 
 const resourceProgressSchema = z.object({
   id: z.string(),
@@ -424,10 +437,9 @@ export async function setResourceCompleted(
 }
 
 export async function removeResource(id: string) {
-  await deleteResource(z.string().parse(id));
+  await deleteResource(z.string().trim().min(1).parse(id));
 
   revalidatePath("/resources");
-  revalidatePath("/");
 }
 
 /* -------------------------------------------------------------------------- */

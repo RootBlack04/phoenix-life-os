@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import type { IncomeType, JobStage, LifeAreaKey } from "@/generated/prisma/enums";
+import type { IncomeType, JobStage, LifeAreaKey, ResourceType } from "@/generated/prisma/enums";
 import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
 
 import type {
@@ -912,6 +912,10 @@ export async function updateResourceProgress(id: string, progress: number) {
       completed: safeProgress === 100,
     },
   });
+}
+
+export async function updateResource(id: string, data: { title: string; type: ResourceType; tag: string; url?: string | null }) {
+  return prisma.resource.update({ where: { id, userId: DEMO_USER_ID }, data });
 }
 
 export async function setResourceCompleted(id: string, completed: boolean) {

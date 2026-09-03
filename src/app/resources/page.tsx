@@ -28,7 +28,7 @@ export default async function ResourcesPage() {
               typeIcon[r.type.toLowerCase() as keyof typeof typeIcon] ?? Link2;
 
             return (
-              <Card key={r.id}>
+              <Card key={r.id} className="min-w-0">
                 <div className="flex items-start justify-between mb-3">
                   <div className="h-9 w-9 rounded-lg bg-white/5 flex items-center justify-center">
                     <Icon className="h-4 w-4 text-accent-blue-soft" />
@@ -39,7 +39,7 @@ export default async function ResourcesPage() {
                   </Badge>
                 </div>
 
-                <p className="text-sm font-medium text-text-primary mb-2">
+                <p className="text-sm font-medium text-text-primary mb-2 break-words">
                   {r.title}
                 </p>
 

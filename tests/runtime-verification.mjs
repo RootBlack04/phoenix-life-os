@@ -34,6 +34,7 @@ let browser, taskId, optionalTaskId;
 let careerTestId;
 let incomeTestId;
 let journalTestId;
+let resourceTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -43,7 +44,59 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_MINDSET_ONLY === "1") {
+  if (process.env.PHOENIX_RESOURCES_ONLY === "1") {
+    const original = await prisma.resource.create({ data: { userId: "demo-user", title: marker, type: "COURSE", tag: "Test", url: "https://example.com/original", progress: 45, completed: false } });
+    resourceTestId = original.id;
+    let confirmDelete = false;
+    page.on("dialog", async (dialog) => {
+      assert.ok(dialog.message().includes(marker)); assert.ok(dialog.message().includes("cannot be undone"));
+      if (confirmDelete) await dialog.accept(); else await dialog.dismiss();
+    });
+    await open("/resources");
+    let region = page.getByRole("region", { name: `Resource ${marker}`, exact: true });
+    await region.getByRole("button", { name: "Edit", exact: true }).click();
+    let form = region.getByRole("form", { name: "Edit resource" });
+    assert.equal(await form.getByLabel("Title", { exact: true }).inputValue(), marker);
+    assert.equal(await form.getByLabel("URL (optional)", { exact: true }).inputValue(), original.url);
+    await form.getByLabel("Title", { exact: true }).fill(`${marker} edited`);
+    await form.getByLabel("Tag", { exact: true }).fill("Reading");
+    await form.getByLabel("Type", { exact: true }).selectOption("BOOK");
+    await form.getByLabel("URL (optional)", { exact: true }).fill("https://example.com/edited");
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await form.getByRole("button", { name: "Save changes" }).click(); await page.getByRole("alert").filter({ hasText: "Could not save" }).waitFor();
+    assert.equal(await form.getByLabel("Title", { exact: true }).inputValue(), `${marker} edited`);
+    assert.equal((await prisma.resource.findUnique({ where: { id: resourceTestId } })).title, marker);
+    await page.unroute("**/*");
+    const saved = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save changes" }).click(); await saved;
+    await page.reload();
+    region = page.getByRole("region", { name: `Resource ${marker} edited`, exact: true }); await region.waitFor();
+    const updated = await prisma.resource.findUnique({ where: { id: resourceTestId } });
+    assert.equal(updated.title, `${marker} edited`); assert.equal(updated.type, "BOOK"); assert.equal(updated.tag, "Reading"); assert.equal(updated.url, "https://example.com/edited");
+    for (const key of ["id", "userId", "progress", "completed"]) assert.equal(updated[key], original[key]);
+    assert.equal(updated.createdAt.getTime(), original.createdAt.getTime());
+    assert.equal(await prisma.resource.count({ where: { userId: "demo-user", title: { in: [marker, `${marker} edited`] } } }), 1);
+    await region.getByRole("button", { name: "Edit", exact: true }).click();
+    form = region.getByRole("form", { name: "Edit resource" });
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    await form.getByLabel("URL (optional)", { exact: true }).fill("");
+    const cleared = page.waitForResponse((response) => response.request().method() === "POST");
+    await form.getByRole("button", { name: "Save changes" }).click(); await cleared; await page.reload();
+    assert.equal((await prisma.resource.findUnique({ where: { id: resourceTestId } })).url, null);
+    assert.equal(await region.getByRole("link", { name: "Open resource" }).count(), 0);
+    await region.getByRole("button", { name: "Delete", exact: true }).click();
+    assert.ok(await prisma.resource.findUnique({ where: { id: resourceTestId } }));
+    confirmDelete = true;
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await region.getByRole("button", { name: "Delete", exact: true }).click(); await page.getByRole("alert").filter({ hasText: "Could not confirm deletion" }).waitFor();
+    assert.ok(await prisma.resource.findUnique({ where: { id: resourceTestId } })); assert.equal(await region.count(), 1);
+    await page.unroute("**/*");
+    const deleted = page.waitForResponse((response) => response.request().method() === "POST");
+    await region.getByRole("button", { name: "Delete", exact: true }).click(); await deleted; await page.reload();
+    assert.equal(await region.count(), 0); assert.equal(await prisma.resource.findUnique({ where: { id: resourceTestId } }), null);
+    assert.deepEqual(errors, []);
+    console.log(`PASS Resource metadata edit/refresh, null URL, same ID/progress/owner/timestamp, failed drafts, cancel/failed/confirmed delete and mobile; deleted ${resourceTestId}`);
+  } else if (process.env.PHOENIX_MINDSET_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const weeklyApi = load("src/lib/analytics/weekly.ts");
     const today = dates.localDateKey(new Date());
@@ -667,6 +720,10 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (resourceTestId) {
+    const removed = await prisma.resource.deleteMany({ where: { id: resourceTestId, userId: "demo-user", title: { in: [marker, `${marker} edited`] } } });
+    console.log(`Temporary resource cleanup: ${removed.count ? "removed" : "already deleted"} ${resourceTestId}`);
+  }
   if (journalTestId) {
     const removed = await prisma.journalEntry.deleteMany({ where: { id: journalTestId, userId: "demo-user", title: { in: [marker, `${marker} edited`] } } });
     console.log(`Temporary journal cleanup: ${removed.count ? "removed" : "already deleted"} ${journalTestId}`);
