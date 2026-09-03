@@ -37,7 +37,7 @@ import {
 } from "@/lib/db";
 
 const noteSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().trim().min(1).optional(),
   title: z.string().trim().min(1, "Title is required").max(120),
   content: z.string().max(20_000),
   tag: z.string().trim().min(1, "Tag is required").max(40),
@@ -252,7 +252,7 @@ export async function saveNote(input: z.input<typeof noteSchema>) {
 }
 
 export async function removeNote(id: string) {
-  await deleteNote(z.string().parse(id));
+  await deleteNote(z.string().trim().min(1).parse(id));
 
   revalidatePath("/notes");
   revalidatePath("/");

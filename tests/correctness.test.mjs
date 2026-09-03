@@ -25,6 +25,49 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Note update/delete require owner plus ID and preserve identity", async () => {
+  let row = { id: "n", userId: "demo-user", title: "Before", content: "Before", tag: "General", pinned: false };
+  const paths = [];
+  const check = (where) => { assert.equal(where.userId, "demo-user"); if (!row || where.id !== row.id) throw new Error("Not owned"); };
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: { note: {
+    update: async ({ where, data }) => { check(where); Object.assign(row, data); return row; },
+    delete: async ({ where }) => { check(where); row = null; },
+  } } } });
+  const { saveNote, removeNote } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (route) => paths.push(route) } });
+  const payload = { id: "n", title: "After", content: "After", tag: "General", pinned: false };
+  await assert.rejects(() => saveNote({ ...payload, id: "foreign" })); await assert.rejects(() => removeNote("foreign"));
+  await assert.rejects(() => saveNote({ ...payload, id: "" })); await assert.rejects(() => removeNote(" "));
+  await saveNote({ ...payload, userId: "foreign" }); assert.equal(row.id, "n"); assert.equal(row.userId, "demo-user"); assert.equal(row.content, "After");
+  await removeNote("n"); assert.equal(row, null); await assert.rejects(() => removeNote("n"));
+  assert.deepEqual(paths, ["/notes", "/", "/notes", "/"]);
+});
+
+test("Notes confirmation cancels safely, guards duplicate delete and retains failed records", async () => {
+  let cursor = 0, refreshes = 0, resolveDelete, rejectDelete, confirmed = false;
+  const slots = [], calls = [], prompts = [];
+  const { NotesClient } = load("src/components/domain/notes-client.tsx", {
+    window: { confirm: (prompt) => { prompts.push(prompt); return confirmed; } },
+    react: {
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = typeof v === "function" ? v(slots[i]) : v; }]; },
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useMemo: (fn) => fn(),
+    },
+    "@/components/ui/card": { Card: "card" }, "@/components/ui/badge": { Badge: "badge" },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { removeNote: (id) => { calls.push(id); return new Promise((resolve, reject) => { resolveDelete = resolve; rejectDelete = reject; }); } },
+  });
+  const notes = [{ id: "n", title: "Private note", content: "Keep", tag: "General", pinned: false }];
+  let tree;
+  const render = () => { cursor = 0; tree = NotesClient({ initialNotes: notes }); };
+  const remove = () => elements(tree, (node) => node.props["aria-label"] === "Delete note")[0].props.onClick();
+  render(); await remove(); assert.equal(calls.length, 0); assert.match(prompts[0], /Private note.*permanent/);
+  confirmed = true; const failed = remove(); await remove(); assert.equal(calls.length, 1);
+  render(); assert.equal(elements(tree, (node) => node.props["aria-label"] === "Delete note")[0].props.disabled, true);
+  rejectDelete(new Error("offline")); await failed; render();
+  assert.match(JSON.stringify(tree), /Could not confirm deletion/); assert.match(JSON.stringify(tree), /Private note/); assert.equal(refreshes, 0);
+  const success = remove(); resolveDelete(); await success; render();
+  assert.match(JSON.stringify(tree), /No notes yet/); assert.match(JSON.stringify(tree), /Create your first note/); assert.equal(refreshes, 1);
+});
 test("Resource metadata validates, preserves progress/timestamps and scopes update/delete", async () => {
   let row = { id: "r", userId: "demo-user", title: "Before", tag: "Study", type: "COURSE", url: "https://example.com", progress: 45, completed: false, createdAt: new Date() };
   const original = { ...row }, paths = [];

@@ -90,6 +90,7 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
   const [query, setQuery] = useState("");
 
   const [pending, setPending] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const saving = useRef(false);
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -179,7 +180,10 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
 
   async function del(id: string) {
     if (saving.current) return;
+    const note = notes.find((item) => item.id === id);
+    if (!note || !window.confirm(`Delete note "${note.title}"? This action is permanent.`)) return;
     saving.current = true;
+    setDeleting(true);
     setPending(true);
     setError(null);
     try {
@@ -187,8 +191,8 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
       setNotes((items) => items.filter((note) => note.id !== id));
       setActiveId((current) => current === id ? "" : current);
       router.refresh();
-    } catch { setError("Could not delete the note. It has been kept."); }
-    finally { saving.current = false; setPending(false); }
+    } catch { setError("Could not confirm deletion. The note is still shown; please refresh or try again."); }
+    finally { saving.current = false; setPending(false); setDeleting(false); }
   }
 
   /* =========================================================
@@ -247,9 +251,9 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
           SIDEBAR
       ====================================================== */}
 
-      <Card className="lg:sticky lg:top-24">
+      <Card className="lg:sticky lg:top-24 min-w-0">
         <div className="mb-3 flex items-center gap-2">
-          <div className="glass flex flex-1 items-center gap-2 rounded-lg px-3 py-2">
+          <div className="glass flex flex-1 min-w-0 items-center gap-2 rounded-lg px-3 py-2">
             <Search className="h-3.5 w-3.5 text-text-tertiary" />
 
             <input
@@ -312,7 +316,7 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
           EDITOR
       ====================================================== */}
 
-      <Card>
+      <Card className="min-w-0">
         {error && <p role="alert" className="mb-3 text-sm text-danger">{error}</p>}
         {active ? (
           <>
@@ -329,7 +333,8 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
                 }
                 onBlur={(event) => saveTitle(event.target.value)}
                 placeholder="Note title"
-                className="flex-1 bg-transparent font-display text-lg font-semibold text-text-primary outline-none"
+                aria-label="Note title"
+                className="flex-1 min-w-0 bg-transparent font-display text-lg font-semibold text-text-primary outline-none"
               />
 
               <div className="flex items-center gap-1">
@@ -372,6 +377,7 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
               </span>
 
               <select
+                aria-label="Note tag"
                 value={active.tag}
                 disabled={pending}
                 onChange={(event) => saveTag(event.target.value)}
@@ -389,13 +395,14 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
               </select>
 
               {pending && (
-                <span className="text-[10px] text-text-tertiary">Saving…</span>
+                <span role="status" className="text-[10px] text-text-tertiary">{deleting ? "Deleting…" : "Saving…"}</span>
               )}
             </div>
 
             {/* Editor */}
 
             <textarea
+              aria-label="Note content"
               disabled={pending}
               value={active.content}
               onChange={(event) =>
@@ -421,7 +428,7 @@ export function NotesClient({ initialNotes }: { initialNotes: Note[] }) {
                 </p>
               </div>
 
-              <div className="min-h-[100px] space-y-1 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="min-h-[100px] space-y-1 rounded-xl border border-white/10 bg-white/[0.02] p-4 break-words">
                 {active.content ? (
                   renderMarkdown(active.content)
                 ) : (

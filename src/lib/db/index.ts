@@ -515,6 +515,7 @@ export async function updateNote(
   return prisma.note.update({
     where: {
       id,
+      userId: DEMO_USER_ID,
     },
 
     data,
@@ -539,6 +540,7 @@ export async function deleteNote(id: string) {
   return prisma.note.delete({
     where: {
       id,
+      userId: DEMO_USER_ID,
     },
   });
 }

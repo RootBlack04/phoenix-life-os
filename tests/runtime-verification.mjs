@@ -35,6 +35,7 @@ let careerTestId;
 let incomeTestId;
 let journalTestId;
 let resourceTestId;
+let noteSafetyTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -44,7 +45,43 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_RESOURCES_ONLY === "1") {
+  if (process.env.PHOENIX_NOTES_ONLY === "1") {
+    const original = await prisma.note.create({ data: { userId: "demo-user", title: marker, content: `${marker} original`, tag: "General", pinned: false } });
+    noteSafetyTestId = original.id;
+    let confirmDelete = false;
+    page.on("dialog", async (dialog) => {
+      assert.ok(dialog.message().includes(marker)); assert.ok(dialog.message().includes("permanent"));
+      if (confirmDelete) await dialog.accept(); else await dialog.dismiss();
+    });
+    await open("/notes");
+    await page.getByRole("button").filter({ hasText: marker }).click();
+    await page.getByLabel("Note content", { exact: true }).fill(`${marker} edited`);
+    const saved = page.waitForResponse((response) => response.request().method() === "POST");
+    await page.getByRole("heading", { name: "Notes", exact: true }).click(); await saved;
+    await page.reload(); await page.getByRole("button").filter({ hasText: marker }).click();
+    assert.equal(await page.getByLabel("Note content", { exact: true }).inputValue(), `${marker} edited`);
+    const updated = await prisma.note.findUnique({ where: { id: noteSafetyTestId } });
+    assert.equal(updated.content, `${marker} edited`); assert.equal(updated.createdAt.getTime(), original.createdAt.getTime());
+    assert.equal(await prisma.note.count({ where: { userId: "demo-user", title: marker } }), 1);
+    await page.getByRole("button", { name: "Delete note", exact: true }).click();
+    assert.ok(await prisma.note.findUnique({ where: { id: noteSafetyTestId } }));
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    confirmDelete = true;
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await page.getByRole("button", { name: "Delete note", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Could not confirm deletion" }).waitFor();
+    assert.equal(await page.getByLabel("Note title", { exact: true }).inputValue(), marker);
+    assert.ok(await prisma.note.findUnique({ where: { id: noteSafetyTestId } }));
+    assert.equal(await page.getByRole("button", { name: "Delete note", exact: true }).isEnabled(), true);
+    await page.unroute("**/*");
+    const deleted = page.waitForResponse((response) => response.request().method() === "POST");
+    await page.getByRole("button", { name: "Delete note", exact: true }).click(); await deleted; await page.reload();
+    assert.equal(await page.getByRole("button").filter({ hasText: marker }).count(), 0);
+    assert.equal(await prisma.note.findUnique({ where: { id: noteSafetyTestId } }), null);
+    await open("/"); assert.equal(await page.getByText(`${marker} edited`, { exact: true }).count(), 0);
+    assert.deepEqual(errors, []);
+    console.log(`PASS Notes same-ID edit/refresh, cancel/failed/confirmed delete, Overview refresh and mobile; deleted ${noteSafetyTestId}`);
+  } else if (process.env.PHOENIX_RESOURCES_ONLY === "1") {
     const original = await prisma.resource.create({ data: { userId: "demo-user", title: marker, type: "COURSE", tag: "Test", url: "https://example.com/original", progress: 45, completed: false } });
     resourceTestId = original.id;
     let confirmDelete = false;
@@ -720,6 +757,10 @@ try {
   }
 } finally {
   if (browser) await browser.close();
+  if (noteSafetyTestId) {
+    const removed = await prisma.note.deleteMany({ where: { id: noteSafetyTestId, userId: "demo-user", title: marker } });
+    console.log(`Temporary note cleanup: ${removed.count ? "removed" : "already deleted"} ${noteSafetyTestId}`);
+  }
   if (resourceTestId) {
     const removed = await prisma.resource.deleteMany({ where: { id: resourceTestId, userId: "demo-user", title: { in: [marker, `${marker} edited`] } } });
     console.log(`Temporary resource cleanup: ${removed.count ? "removed" : "already deleted"} ${resourceTestId}`);
