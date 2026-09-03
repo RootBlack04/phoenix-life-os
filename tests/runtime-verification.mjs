@@ -37,6 +37,7 @@ let journalTestId;
 let resourceTestId;
 let noteSafetyTestId;
 const engineeringTestIds = [];
+let languageTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -46,7 +47,52 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_ENGINEERING_ONLY === "1") {
+  if (process.env.PHOENIX_LANGUAGES_ONLY === "1") {
+    const original = await prisma.language.create({ data: {
+      userId: "demo-user", code: marker, name: "Verification language", flag: "T", currentLevel: "A1", targetLevel: "B1",
+      percent: 73, vocabulary: 10, grammar: 20, listening: 30, speaking: 40, writing: 50, reading: 60, hoursLogged: 12,
+    } });
+    languageTestId = original.id;
+    const card = page.locator('.glass-hover').filter({ has: page.getByRole("heading", { name: "Verification language", exact: true }) });
+    const plus = card.getByRole("button", { name: "Increase Speaking", exact: true });
+    const skillRow = card.locator('[aria-busy]').filter({ has: page.getByRole("button", { name: "Increase Speaking", exact: true }) });
+    await open("/languages");
+    let release, requests = 0;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/*", async (route) => { if (route.request().method() === "POST") { requests++; await held; } await route.continue(); });
+    await plus.click(); await plus.dispatchEvent("click");
+    assert.ok((await skillRow.innerText()).includes("40%"));
+    assert.equal(await card.getByRole("button", { name: "Increase Reading", exact: true }).isEnabled(), true);
+    assert.equal(await card.getByRole("button", { name: "Add session", exact: true }).isEnabled(), true);
+    const saved = page.waitForResponse((r) => r.request().method() === "POST"); release(); await saved;
+    await page.unroute("**/*"); await page.reload();
+    assert.equal(requests, 1); assert.ok((await skillRow.innerText()).includes("45%"));
+    const updated = await prisma.language.findUnique({ where: { id: original.id } });
+    for (const key of Object.keys(original).filter((k) => !["updatedAt", "speaking"].includes(k))) assert.deepEqual(updated[key], original[key]);
+    assert.equal(updated.speaking, 45);
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await plus.click(); await card.getByRole("alert").waitFor();
+    assert.ok((await skillRow.innerText()).includes("45%")); await page.unroute("**/*"); await page.reload();
+    await db.updateLanguageSkills(original.id, { skill: "speaking", value: 60, expectedValue: 45 });
+    await plus.click(); await card.getByRole("alert").waitFor();
+    await page.reload(); assert.ok((await skillRow.innerText()).includes("60%"));
+    const retry = page.waitForResponse((r) => r.request().method() === "POST"); await plus.click(); await retry; await page.reload();
+    assert.equal((await prisma.language.findUnique({ where: { id: original.id } })).speaking, 65);
+    await assert.rejects(() => db.createLanguageStudySession({ languageId: `${marker}-missing`, date: new Date(), minutes: 30, skill: "listening" }));
+    await card.getByRole("button", { name: "Add session", exact: true }).click();
+    await card.getByLabel("Minutes", { exact: true }).fill("25");
+    await card.getByLabel("Note", { exact: true }).fill(marker);
+    const sessionSaved = page.waitForResponse((r) => r.request().method() === "POST");
+    await card.getByRole("button", { name: "Save session", exact: true }).click(); await sessionSaved; await page.reload();
+    await card.getByText(marker, { exact: true }).waitFor();
+    const sessions = await prisma.languageStudySession.findMany({ where: { languageId: original.id } });
+    assert.equal(sessions.length, 1); assert.equal(sessions[0].minutes, 25); assert.equal(sessions[0].skill, "listening");
+    assert.equal((await prisma.language.findUnique({ where: { id: original.id } })).hoursLogged, 12);
+    await page.setViewportSize({ width: 390, height: 844 }); await plus.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    assert.deepEqual(errors, []);
+    console.log("PASS Languages single-skill persistence, unchanged fields/overall, failure/retry, stale rejection, duplicate guard, independent controls, session creation and mobile");
+  } else if (process.env.PHOENIX_ENGINEERING_ONLY === "1") {
     for (const suffix of ["", " second"]) {
       const row = await prisma.project.create({ data: { userId: "demo-user", name: marker + suffix, progress: 40, status: "IN_PROGRESS", technologies: ["Test"] } });
       engineeringTestIds.push(row.id);
@@ -796,6 +842,13 @@ try {
   console.log("PASS no uncaught browser errors");
   }
 } finally {
+  if (languageTestId) {
+    const sessions = await prisma.languageStudySession.findMany({ where: { languageId: languageTestId, note: marker }, select: { id: true } });
+    for (const session of sessions) await prisma.languageStudySession.deleteMany({ where: { id: session.id, languageId: languageTestId, note: marker } });
+    const removed = await prisma.language.deleteMany({ where: { id: languageTestId, userId: "demo-user", code: marker } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED exact temporary Language ${languageTestId} and ${sessions.length} test sessions`);
+  }
   for (const id of engineeringTestIds) {
     const removed = await prisma.project.deleteMany({ where: { id, userId: "demo-user", name: { in: [marker, `${marker} second`] } } });
     assert.equal(removed.count, 1);

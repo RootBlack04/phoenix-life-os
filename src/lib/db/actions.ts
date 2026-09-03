@@ -185,7 +185,7 @@ const resourceCompletedSchema = z.object({
 });
 
 const languageStudySessionSchema = z.object({
-  languageId: z.string(),
+  languageId: z.string().trim().min(1),
   date: z.coerce.date(),
   minutes: z.number().int().positive().max(1440),
   skill: z.enum([
@@ -200,14 +200,10 @@ const languageStudySessionSchema = z.object({
 });
 
 const languageSkillsSchema = z.object({
-  id: z.string(),
-  percent: z.number().int().min(0).max(100),
-  vocabulary: z.number().int().min(0).max(100),
-  grammar: z.number().int().min(0).max(100),
-  listening: z.number().int().min(0).max(100),
-  speaking: z.number().int().min(0).max(100),
-  writing: z.number().int().min(0).max(100),
-  reading: z.number().int().min(0).max(100),
+  id: z.string().trim().min(1),
+  skill: z.enum(["vocabulary", "grammar", "listening", "speaking", "writing", "reading"]),
+  value: z.number().int().min(0).max(100),
+  expectedValue: z.number().int().min(0).max(100),
 });
 
 const journalSchema = z.object({
@@ -329,13 +325,9 @@ export async function setLanguageSkills(
   const data = languageSkillsSchema.parse(input);
 
   await updateLanguageSkills(data.id, {
-    percent: data.percent,
-    vocabulary: data.vocabulary,
-    grammar: data.grammar,
-    listening: data.listening,
-    speaking: data.speaking,
-    writing: data.writing,
-    reading: data.reading,
+    skill: data.skill,
+    value: data.value,
+    expectedValue: data.expectedValue,
   });
 
   revalidatePath("/languages");

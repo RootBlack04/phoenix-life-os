@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Minus, BookOpen, Clock3 } from "lucide-react";
 
@@ -115,39 +115,6 @@ export function LanguagesClient({
     note: "",
   });
 
-  function adjustSkill(languageId: string, skill: SkillKey, delta: number) {
-    if (pending) return;
-    setError(null);
-    const language = languages.find((item) => item.id === languageId);
-
-    if (!language) return;
-
-    const nextValue = clamp(language[skill] + delta);
-
-    if (nextValue === language[skill]) return;
-
-    const updated = {
-      ...language,
-      [skill]: nextValue,
-    };
-
-    startTransition(async () => {
-      try {
-      await setLanguageSkills({
-        id: languageId,
-        percent: updated.percent,
-        vocabulary: updated.vocabulary,
-        grammar: updated.grammar,
-        listening: updated.listening,
-        speaking: updated.speaking,
-        writing: updated.writing,
-        reading: updated.reading,
-      });
-      router.refresh();
-      } catch { setError("Could not save skill progress. The displayed values have not changed."); }
-    });
-  }
-
   function submitStudySession(language: Language) {
     if (pending) return;
     setError(null);
@@ -220,41 +187,7 @@ export function LanguagesClient({
 
           <div className="space-y-3 mb-5">
             {skills.map((skill) => (
-              <div
-                key={skill.key}
-                className="grid grid-cols-[1fr_auto] gap-3 items-center"
-              >
-                <DetailProgress
-                  label={skill.label}
-                  percent={language[skill.key]}
-                />
-
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    disabled={pending || language[skill.key] <= 0}
-                    onClick={() => adjustSkill(language.id, skill.key, -5)}
-                    aria-label={`Decrease ${skill.label}`}
-                    className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </button>
-
-                  <span className="font-mono-num text-xs text-text-secondary w-8 text-center">
-                    {language[skill.key]}%
-                  </span>
-
-                  <button
-                    type="button"
-                    disabled={pending || language[skill.key] >= 100}
-                    onClick={() => adjustSkill(language.id, skill.key, 5)}
-                    aria-label={`Increase ${skill.label}`}
-                    className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
+              <SkillControl key={skill.key} languageId={language.id} skill={skill.key} label={skill.label} value={language[skill.key]} />
             ))}
           </div>
 
@@ -431,6 +364,57 @@ export function LanguagesClient({
           </div>
         </Card>
       ))}
+    </div>
+  );
+}
+
+function SkillControl({ languageId, skill, label, value }: {
+  languageId: string;
+  skill: SkillKey;
+  label: string;
+  value: number;
+}) {
+  const router = useRouter();
+  const saving = useRef(false);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function adjust(delta: number) {
+    if (saving.current || pending) return;
+    const nextValue = clamp(value + delta);
+    if (nextValue === value) return;
+    saving.current = true;
+    setError(null);
+    startTransition(async () => {
+      try {
+        await setLanguageSkills({ id: languageId, skill, value: nextValue, expectedValue: value });
+        router.refresh();
+      } catch {
+        setError("Could not save skill progress. Refreshing saved values; please try again.");
+        router.refresh();
+      } finally {
+        saving.current = false;
+      }
+    });
+  }
+
+  return (
+    <div>
+      <div className="grid grid-cols-[1fr_auto] gap-3 items-center" aria-busy={pending}>
+        <DetailProgress label={label} percent={value} />
+        <div className="flex items-center gap-1">
+          <button type="button" disabled={pending || value <= 0} onClick={() => adjust(-5)} aria-label={`Decrease ${label}`}
+            className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+            <Minus className="h-3.5 w-3.5" />
+          </button>
+          <span className="font-mono-num text-xs text-text-secondary w-8 text-center">{value}%</span>
+          <button type="button" disabled={pending || value >= 100} onClick={() => adjust(5)} aria-label={`Increase ${label}`}
+            className="h-7 w-7 rounded-lg glass flex items-center justify-center text-text-secondary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
     </div>
   );
 }

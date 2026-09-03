@@ -25,6 +25,89 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Language weekly metrics remain session-based, independent of stored skills and lifetime hours", async () => {
+  const language = { percent: 73, speaking: 40, hoursLogged: 900, weeklyGoalHours: 4, studySessions: [{ minutes: 30 }, { minutes: 60 }] };
+  const prisma = Object.fromEntries(["habit", "language", "engineeringTrack", "project", "jobApplication", "healthMetric", "journalEntry", "task", "dailyMetric"].map((name) => [name, { findMany: async () => name === "language" ? [language] : [] }]));
+  const { getWeeklyMetrics } = load("src/lib/analytics/weekly.ts", { "@/lib/prisma": { prisma } });
+  const before = (await getWeeklyMetrics(new Date("2026-09-03T12:00:00Z"))).current.languages;
+  assert.equal(before.studyMinutes, 90); assert.equal(before.studyHours, 1.5);
+  assert.equal(before.sessions, 2); assert.equal(before.goalHours, 4); assert.equal(before.goalCompletionRate, 38);
+  language.speaking = 45;
+  assert.deepEqual((await getWeeklyMetrics(new Date("2026-09-03T12:00:00Z"))).current.languages, before);
+});
+test("Language single-skill writes enforce ownership and narrow CAS without altering overall or other skills", async () => {
+  const row = { id: "owned", userId: "demo-user", vocabulary: 10, grammar: 20, listening: 30, speaking: 40, writing: 50, reading: 60, percent: 73, hoursLogged: 15 };
+  const foreign = { ...row, id: "foreign", userId: "other" };
+  const paths = [], sessions = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: {
+    language: { updateMany: async ({ where, data }) => {
+      assert.equal(where.userId, "demo-user");
+      assert.equal(Object.keys(data).length, 1);
+      const target = [row, foreign].find((r) => Object.entries(where).every(([k, v]) => r[k] === v));
+      if (!target) return { count: 0 };
+      Object.assign(target, data); return { count: 1 };
+    } },
+    languageStudySession: { create: async ({ data }) => {
+      const connect = data.language.connect;
+      assert.equal(connect.userId, "demo-user");
+      if (![row, foreign].some((r) => r.id === connect.id && r.userId === connect.userId)) throw new Error("Unavailable");
+      sessions.push(data); return data;
+    } },
+  } } });
+  const { setLanguageSkills, addLanguageStudySession } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (p) => paths.push(p) } });
+  const payload = { id: "owned", skill: "speaking", value: 45, expectedValue: 40 };
+  for (const id of ["foreign", "missing", " "]) await assert.rejects(() => setLanguageSkills({ ...payload, id }));
+  for (const skill of ["percent", "userId", "__proto__", "Speaking", ""]) await assert.rejects(() => setLanguageSkills({ ...payload, skill }));
+  for (const value of [-1, 101, 1.5, NaN, Infinity, "45", null, undefined]) {
+    await assert.rejects(() => setLanguageSkills({ ...payload, value }));
+    await assert.rejects(() => setLanguageSkills({ ...payload, expectedValue: value }));
+  }
+  await setLanguageSkills({ ...payload, percent: 0, reading: 0, userId: "other" });
+  assert.deepEqual(row, { id: "owned", userId: "demo-user", vocabulary: 10, grammar: 20, listening: 30, speaking: 45, writing: 50, reading: 60, percent: 73, hoursLogged: 15 });
+  await assert.rejects(() => setLanguageSkills(payload));
+  await setLanguageSkills({ ...payload, skill: "reading", value: 65, expectedValue: 60 });
+  assert.equal(row.speaking, 45); assert.equal(row.reading, 65); assert.equal(foreign.speaking, 40);
+  const session = { languageId: "owned", date: new Date("2026-09-03T10:00:00Z"), minutes: 30, skill: "listening", note: "Keep" };
+  for (const languageId of ["foreign", "missing", " "]) await assert.rejects(() => addLanguageStudySession({ ...session, languageId }));
+  for (const minutes of [0, -1, 1.5, 1441, NaN, "30"]) await assert.rejects(() => addLanguageStudySession({ ...session, minutes }));
+  await assert.rejects(() => addLanguageStudySession({ ...session, skill: "invalid" }));
+  await assert.rejects(() => addLanguageStudySession({ ...session, note: "x".repeat(501) }));
+  await addLanguageStudySession(session);
+  assert.equal(sessions.length, 1); assert.equal(sessions[0].date.getTime(), session.date.getTime());
+  assert.equal(sessions[0].minutes, 30); assert.equal(sessions[0].note, "Keep"); assert.equal(row.hoursLogged, 15);
+  assert.deepEqual(paths, ["/languages", "/", "/languages", "/", "/languages", "/"]);
+});
+
+test("Language skill control keeps persisted props, rejects duplicate clicks and recovers failure", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [];
+  const { LanguagesClient } = load("src/components/domain/languages-client.tsx", {
+    react: {
+      useRef: (initial) => { const i = cursor++; return slots[i] ??= { current: initial }; },
+      useState: (initial) => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = v; }]; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/lib/db/actions": { setLanguageSkills: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+    "@/components/ui/card": { Card: "card" }, "@/components/ui/badge": { Badge: "badge" },
+    "@/components/ui/progress-ring": { ProgressRing: "ring" }, "@/components/ui/detail-progress": { DetailProgress: "detail" },
+    "@/components/charts/language-chart": { LanguageChart: "chart" },
+  });
+  const language = { id: "lang", name: "Test", vocabulary: 10, grammar: 20, listening: 30, speaking: 40, writing: 50, reading: 60, studySessions: [] };
+  const tree = LanguagesClient({ initialLanguages: [language] });
+  const skill = elements(tree, (n) => typeof n.type === "function" && n.props.skill === "speaking")[0];
+  slots.length = 0;
+  const render = (value = 40) => { cursor = 0; return skill.type({ ...skill.props, value }); };
+  const plus = () => elements(render(), (n) => n.props?.["aria-label"] === "Increase Speaking")[0];
+  const value = (tree) => elements(tree, (n) => n.type === "detail")[0].props.percent;
+  plus().props.onClick(); plus().props.onClick();
+  assert.equal(calls.length, 1); assert.equal(value(render()), 40);
+  assert.deepEqual(Object.keys(calls[0]).sort(), ["expectedValue", "id", "skill", "value"]);
+  rejectSave(new Error("Fail")); await transitions.pop();
+  assert.equal(value(render()), 40); assert.equal(elements(render(), (n) => n.props?.role === "alert").length, 1);
+  plus().props.onClick(); resolveSave(); await transitions.pop();
+  assert.equal(refreshes, 2); assert.equal(value(render(45)), 45);
+});
 test("Engineering writes enforce ownership, expected progress, validation and independent status", async () => {
   const rows = [{ id: "owned", userId: "demo-user", progress: 40, status: "IN_PROGRESS", name: "Keep" }, { id: "foreign", userId: "other", progress: 40, status: "DONE" }];
   const paths = [];

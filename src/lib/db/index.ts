@@ -615,7 +615,7 @@ export async function createLanguageStudySession(data: {
 }) {
   return prisma.languageStudySession.create({
     data: {
-      languageId: data.languageId,
+      language: { connect: { id: data.languageId, userId: DEMO_USER_ID } },
       date: data.date,
       minutes: data.minutes,
       skill: data.skill,
@@ -627,30 +627,21 @@ export async function createLanguageStudySession(data: {
 export async function updateLanguageSkills(
   id: string,
   data: {
-    percent: number;
-    vocabulary: number;
-    grammar: number;
-    listening: number;
-    speaking: number;
-    writing: number;
-    reading: number;
+    skill: "vocabulary" | "grammar" | "listening" | "speaking" | "writing" | "reading";
+    value: number;
+    expectedValue: number;
   },
 ) {
-  return prisma.language.update({
-    where: {
-      id,
-    },
-
-    data: {
-      percent: Math.max(0, Math.min(100, data.percent)),
-      vocabulary: Math.max(0, Math.min(100, data.vocabulary)),
-      grammar: Math.max(0, Math.min(100, data.grammar)),
-      listening: Math.max(0, Math.min(100, data.listening)),
-      speaking: Math.max(0, Math.min(100, data.speaking)),
-      writing: Math.max(0, Math.min(100, data.writing)),
-      reading: Math.max(0, Math.min(100, data.reading)),
-    },
+  if (!id.trim() || !["vocabulary", "grammar", "listening", "speaking", "writing", "reading"].includes(data.skill)
+    || ![data.value, data.expectedValue].every((value) => Number.isInteger(value) && value >= 0 && value <= 100)) {
+    throw new Error("Invalid language skill progress");
+  }
+  // Overall percent is an independent stored snapshot, not a skill average.
+  const result = await prisma.language.updateMany({
+    where: { id, userId: DEMO_USER_ID, [data.skill]: data.expectedValue },
+    data: { [data.skill]: data.value },
   });
+  if (result.count !== 1) throw new Error("Language unavailable or changed. Refresh and try again.");
 }
 /* =========================================================
    ENGINEERING
