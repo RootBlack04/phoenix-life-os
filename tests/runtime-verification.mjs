@@ -38,6 +38,7 @@ let resourceTestId;
 let noteSafetyTestId;
 const engineeringTestIds = [];
 let languageTestId;
+let habitTestId;
 let healthTestDate, healthTestId;
 const healthHistoryTestIds = [];
 const nextActionIds = [];
@@ -47,7 +48,44 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async (route) => { await page.goto(base + route); await page.getByRole("heading", { level: 1 }).waitFor(); };
-  if (process.env.PHOENIX_LANGUAGE_TRUTH_ONLY === "1") {
+  if (process.env.PHOENIX_HABITS_ONLY === "1") {
+    const dates = load("src/lib/dates.ts");
+    const today = dates.localDateKey(new Date());
+    const original = await prisma.habit.create({ data: { userId: "demo-user", name: marker, emoji: "T", target: 7 } });
+    habitTestId = original.id;
+    const cell = page.getByRole("button", { name: `${marker} ${today}`, exact: true });
+    await open("/habits");
+    let release, requests = 0;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/*", async (route) => { if (route.request().method() === "POST") { requests++; await held; } await route.continue(); });
+    await cell.click(); await cell.dispatchEvent("click"); assert.equal(await cell.getAttribute("aria-pressed"), "false");
+    const saved = page.waitForResponse((r) => r.request().method() === "POST"); release(); await saved; await page.unroute("**/*");
+    await page.reload(); assert.equal(requests, 1); assert.equal(await cell.getAttribute("aria-pressed"), "true");
+    await db.toggleHabit(original.id, today, true);
+    assert.equal(await prisma.habitLog.count({ where: { habitId: original.id } }), 1);
+    for (let i = 0; i < 7; i++) {
+      const day = dates.addDateDays(dates.mondayKey(), i);
+      if (day > today) assert.equal(await page.getByRole("button", { name: `${marker} ${day}`, exact: true }).isEnabled(), false);
+    }
+    await assert.rejects(() => db.toggleHabit(original.id, dates.addDateDays(today, 1), true));
+    await assert.rejects(() => db.toggleHabit(`${marker}-missing`, today, true));
+    await page.route("**/*", (route) => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await cell.click(); await page.getByRole("alert").filter({ hasText: "Could not save the habit" }).waitFor();
+    assert.equal(await cell.getAttribute("aria-pressed"), "true");
+    assert.equal((await prisma.habitLog.findFirst({ where: { habitId: original.id } })).completed, true);
+    await page.unroute("**/*"); await page.reload();
+    const unchecked = page.waitForResponse((r) => r.request().method() === "POST"); await cell.click(); await unchecked; await page.reload();
+    assert.equal(await cell.getAttribute("aria-pressed"), "false");
+    assert.equal(await prisma.habitLog.count({ where: { habitId: original.id } }), 1);
+    await page.setViewportSize({ width: 390, height: 844 }); await cell.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    await open("/"); await cell.waitFor({ state: "visible" });
+    const overviewSaved = page.waitForResponse((r) => r.request().method() === "POST"); await cell.click(); await overviewSaved; await page.reload();
+    assert.equal(await cell.getAttribute("aria-pressed"), "true");
+    assert.equal(await prisma.habitLog.count({ where: { habitId: original.id } }), 1);
+    assert.deepEqual(errors, []);
+    console.log("PASS Habits check/uncheck refresh, failure/retry, duplicate guard, unique row, future rejection/disabled cells, Overview and mobile");
+  } else if (process.env.PHOENIX_LANGUAGE_TRUTH_ONLY === "1") {
     const dates = load("src/lib/dates.ts");
     const week = dates.weekTimestampRange(dates.mondayKey());
     const original = await prisma.language.create({ data: {
@@ -873,6 +911,13 @@ try {
   console.log("PASS no uncaught browser errors");
   }
 } finally {
+  if (habitTestId) {
+    const logs = await prisma.habitLog.findMany({ where: { habitId: habitTestId }, select: { id: true } });
+    for (const log of logs) await prisma.habitLog.deleteMany({ where: { id: log.id, habitId: habitTestId } });
+    const removed = await prisma.habit.deleteMany({ where: { id: habitTestId, userId: "demo-user", name: marker } });
+    assert.equal(removed.count, 1);
+    console.log(`REMOVED exact temporary Habit ${habitTestId} and ${logs.length} logs`);
+  }
   if (languageTestId) {
     const sessions = await prisma.languageStudySession.findMany({ where: { languageId: languageTestId, note: marker }, select: { id: true } });
     for (const session of sessions) await prisma.languageStudySession.deleteMany({ where: { id: session.id, languageId: languageTestId, note: marker } });

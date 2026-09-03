@@ -9,6 +9,11 @@ export function localDateKey(date: Date) {
 
 // SQL DATE values represent calendar labels, not timezone-shifted instants.
 export const dateFromKey = (key: string) => new Date(`${key}T00:00:00.000Z`);
+export function isValidDateKey(key: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+  const date = dateFromKey(key);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === key;
+}
 export function addDateDays(key: string, days: number) {
   const date = dateFromKey(key);
   date.setUTCDate(date.getUTCDate() + days);

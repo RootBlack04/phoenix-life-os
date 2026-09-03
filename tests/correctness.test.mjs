@@ -25,6 +25,72 @@ function load(file, mocks = {}) {
 }
 
 const dates = load("src/lib/dates.ts");
+test("Habit weekly metrics count completed booleans once and retain target semantics", async () => {
+  const habit = { target: 3, logs: [] };
+  const prisma = Object.fromEntries(["habit", "language", "engineeringTrack", "project", "jobApplication", "healthMetric", "journalEntry", "task", "dailyMetric"].map((name) => [name, { findMany: async () => name === "habit" ? [habit] : [] }]));
+  const { getWeeklyMetrics } = load("src/lib/analytics/weekly.ts", { "@/lib/prisma": { prisma } });
+  const metrics = async () => (await getWeeklyMetrics()).current.habits;
+  assert.equal((await metrics()).completed, 0);
+  habit.logs.push({ completed: true });
+  assert.equal((await metrics()).completed, 1); assert.equal((await metrics()).expected, 3); assert.equal((await metrics()).completionRate, 33);
+  habit.logs[0].completed = false;
+  assert.equal((await metrics()).completed, 0);
+});
+test("Habit writes validate exact calendar days, reject future/foreign records and preserve unique boolean rows", async () => {
+  const rows = new Map(), paths = [];
+  const db = load("src/lib/db/index.ts", { "@/lib/prisma": { prisma: {
+    habit: { findFirst: async ({ where }) => { assert.equal(where.userId, "demo-user"); return where.id === "owned" ? { id: "owned" } : null; } },
+    habitLog: { upsert: async ({ where, create, update }) => {
+      assert.equal(where.habit.userId, "demo-user"); assert.equal(create.habit.connect.userId, "demo-user");
+      const key = `${where.habitId_date.habitId}/${where.habitId_date.date.toISOString()}`;
+      const row = rows.get(key) ?? { completed: create.completed }; Object.assign(row, update); rows.set(key, row); return row;
+    } },
+  } } });
+  const { setHabit } = load("src/lib/db/actions.ts", { "@/lib/db": db, "next/cache": { revalidatePath: (p) => paths.push(p) } });
+  const today = dates.localDateKey(new Date());
+  const input = { habitId: "owned", date: today, completed: true };
+  for (const date of ["2026-02-30", "2025-02-29", "2026-13-01", "2026-1-01", "", "2026-01-01T00:00:00Z", dates.addDateDays(today, 1)]) {
+    await assert.rejects(() => setHabit({ ...input, date }));
+    await assert.rejects(() => db.toggleHabit("owned", date, true));
+  }
+  for (const habitId of ["foreign", "missing", " "]) await assert.rejects(() => setHabit({ ...input, habitId }));
+  assert.equal(rows.size, 0); assert.equal(paths.length, 0);
+  await setHabit(input); await setHabit(input); assert.equal(rows.size, 1);
+  assert.equal(rows.get(`owned/${today}T00:00:00.000Z`).completed, true);
+  await setHabit({ ...input, completed: false }); assert.equal(rows.size, 1);
+  assert.equal(rows.get(`owned/${today}T00:00:00.000Z`).completed, false);
+  await setHabit({ ...input, date: "2024-02-29" });
+  await setHabit({ ...input, date: dates.mondayKey() });
+  assert.equal(paths.length, 10);
+  assert.equal(dates.localDateKey(new Date("2026-08-30T23:30:00Z")), "2026-08-31");
+});
+
+test("Habit cell prevents future/duplicate toggles, retains failures and refreshes server props", async () => {
+  let cursor = 0, refreshes = 0, resolveSave, rejectSave;
+  const slots = [], calls = [], transitions = [];
+  const { HabitCell } = load("src/components/domain/habits-client.tsx", {
+    react: {
+      useRef: (v) => { const i = cursor++; return slots[i] ??= { current: v }; },
+      useState: (v) => { const i = cursor++; if (!(i in slots)) slots[i] = v; return [slots[i], (next) => { slots[i] = next; }]; },
+      useTransition: () => [false, (fn) => transitions.push(fn())],
+    },
+    "next/navigation": { useRouter: () => ({ refresh: () => refreshes++ }) },
+    "@/components/ui/card": { Card: "card", CardHeader: "header" },
+    "@/lib/db/actions": { setHabit: (input) => { calls.push(input); return new Promise((resolve, reject) => { resolveSave = resolve; rejectSave = reject; }); } },
+  });
+  const today = dates.localDateKey(new Date());
+  const render = (completed = false, date = today) => { cursor = 0; return HabitCell({ habitId: "h", label: "Habit", date, completed }); };
+  const button = (tree = render()) => elements(tree, (n) => n.type === "button")[0];
+  const future = button(render(false, dates.addDateDays(today, 1)));
+  assert.equal(future.props.disabled, true); future.props.onClick(); assert.equal(calls.length, 0);
+  button().props.onClick(); button().props.onClick(); assert.equal(calls.length, 1);
+  assert.equal(button().props["aria-pressed"], false);
+  rejectSave(new Error("Failure")); await transitions.pop();
+  assert.equal(button().props["aria-pressed"], false); assert.equal(elements(render(), (n) => n.props?.role === "alert").length, 1);
+  button().props.onClick(); resolveSave(); await transitions.pop();
+  assert.equal(button(render(true)).props["aria-pressed"], true); assert.equal(refreshes, 2);
+  assert.match(fs.readFileSync(path.join(root, "src/components/dashboard/habits-tracker.tsx"), "utf8"), /<HabitCell/);
+});
 test("Languages display real skill/session summaries, Casablanca boundaries and discrete history", () => {
   const { LanguagesClient } = load("src/components/domain/languages-client.tsx", {
     react: { useState: (v) => [v, () => {}], useTransition: () => [false, () => {}] },

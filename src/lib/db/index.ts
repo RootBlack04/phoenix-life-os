@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import type { IncomeType, JobStage, LifeAreaKey, ResourceType } from "@/generated/prisma/enums";
-import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays } from "@/lib/dates";
+import { APP_TIMEZONE, localDateKey, dateFromKey, mondayKey, addDateDays, isValidDateKey } from "@/lib/dates";
 
 import type {
   KpiMetric,
@@ -443,7 +443,10 @@ export async function toggleHabit(
   dateKey: string,
   completed: boolean,
 ) {
-  const date = dateKeyToUtcDate(dateKey);
+  if (!isValidDateKey(dateKey) || dateKey > localDateKey(new Date())) throw new Error("Invalid or future habit date");
+  const habit = await prisma.habit.findFirst({ where: { id: habitId, userId: DEMO_USER_ID }, select: { id: true } });
+  if (!habit) throw new Error("Habit unavailable");
+  const date = dateFromKey(dateKey);
 
   /*
    * Because the schema has:
@@ -456,6 +459,7 @@ export async function toggleHabit(
    */
   return prisma.habitLog.upsert({
     where: {
+      habit: { userId: DEMO_USER_ID },
       habitId_date: {
         habitId,
         date,
@@ -467,7 +471,7 @@ export async function toggleHabit(
     },
 
     create: {
-      habitId,
+      habit: { connect: { id: habitId, userId: DEMO_USER_ID } },
       date,
       completed,
     },

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { IncomeType, JobStage, LifeAreaKey, ResourceType } from "@/generated/prisma/enums";
-import { dateFromKey, localDateKey, localMidnight } from "@/lib/dates";
+import { dateFromKey, localDateKey, localMidnight, isValidDateKey } from "@/lib/dates";
 
 import {
   createHealthMetric,
@@ -83,8 +83,9 @@ export async function reopenCompletedGoal(id: string) {
 }
 
 const habitSchema = z.object({
-  habitId: z.string(),
-  date: z.string(),
+  habitId: z.string().trim().min(1),
+  date: z.string().refine(isValidDateKey, "Enter a valid YYYY-MM-DD date")
+    .refine((date) => date <= localDateKey(new Date()), "Future check-ins are not allowed"),
   completed: z.boolean(),
 });
 
